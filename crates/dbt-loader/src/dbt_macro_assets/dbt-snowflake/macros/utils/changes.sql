@@ -11,8 +11,9 @@
     false filter on a CI DT's change source fails with 002707 "depends on one or more dropped base
     table".)
 
-    The table name is the relation's own (`relation.render()`), so a `--sample` or event_time
-    filter on the relation does not apply to its CHANGES.
+    Under `--sample` it renders `(select * from <relation> changes(...) where <sample window>)`,
+    the window on the relation's event_time. The CI DT stores that window in its definition, so it
+    keeps refreshing with it until `--full-refresh`, as a regular dynamic table does.
 
     Args:
     - relation: the change source, usually `ref(...)` or `source(...)`
@@ -30,11 +31,15 @@
         ) %}
     {%- endif -%}
     {#- CHANGES must directly follow a table name. `{{ relation }}` renders as a filtered subquery
-        under --empty / --sample, so use the plain name from `relation.render()`. -#}
+        under --empty / --sample, so use the plain name from `relation.render()` and apply the
+        filter after CHANGES. -#}
     {%- set table = relation if relation is string else relation.render() -%}
+    {%- set sample_filter = none if relation is string else relation.sample_filter() -%}
     {%- set clause = table ~ ' ' ~ snowflake__changes_clause(information) -%}
     {%- if flags is defined and flags.EMPTY -%}
         (select * from {{ clause }} limit 0)
+    {%- elif sample_filter -%}
+        (select * from {{ clause }} where {{ sample_filter }})
     {%- else -%}
         {{ clause }}
     {%- endif -%}

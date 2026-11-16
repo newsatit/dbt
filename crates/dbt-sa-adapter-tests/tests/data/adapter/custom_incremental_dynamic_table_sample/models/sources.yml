@@ -1,0 +1,7 @@
+sources:
+  - name: raw
+    schema: "{{ target.schema }}"
+    tables:
+      - name: orders
+        config:
+          event_time: ordered_at

@@ -538,10 +538,25 @@ pub trait BaseRelation: BaseRelationProperties + Any + Send + Sync + fmt::Debug 
             rendered
         };
 
+        // FIXME: for Postgres, we need to support _render_subquery_alias for the returned result
+        // reference: https://github.com/dbt-labs/dbt-adapters/blob/d2f725651c05be0de07f3152d5b4842feae8a18a/dbt-adapters/src/dbt/adapters/base/relation.py#L222
+        match self.sample_predicate(run_filter, event_time) {
+            Some(filter) => format!("(select * from {rendered} where {filter})"),
+            None => rendered,
+        }
+    }
+
+    /// The `event_time` window of `run_filter` (`--sample`, or a microbatch's batch) as the
+    /// predicate [`Self::render_with_run_filter`] filters on, e.g.
+    /// `ts >= to_timestamp_tz('...') and ts < to_timestamp_tz('...')`. None without an
+    /// `event_time` or a window.
+    fn sample_predicate(
+        &self,
+        run_filter: &RunFilter,
+        event_time: &Option<String>,
+    ) -> Option<String> {
         // no event_time? no filter
-        let Some(event_time) = event_time.as_deref() else {
-            return rendered;
-        };
+        let event_time = event_time.as_deref()?;
 
         // get start/end times
         let (start, end) = run_filter.sample_times();
@@ -614,16 +629,12 @@ pub trait BaseRelation: BaseRelationProperties + Any + Send + Sync + fmt::Debug 
         };
 
         // create the filter expression
-        let filter = match (start, end) {
-            (None, None) => return rendered,
-            (Some(start), Some(end)) => format!("{start} and {end}"),
-            (Some(start), None) => start,
-            (None, Some(end)) => end,
-        };
-
-        // FIXME: for Postgres, we need to support _render_subquery_alias for the returned result
-        // reference: https://github.com/dbt-labs/dbt-adapters/blob/d2f725651c05be0de07f3152d5b4842feae8a18a/dbt-adapters/src/dbt/adapters/base/relation.py#L222
-        format!("(select * from {rendered} where {filter})")
+        match (start, end) {
+            (None, None) => None,
+            (Some(start), Some(end)) => Some(format!("{start} and {end}")),
+            (Some(start), None) => Some(start),
+            (None, Some(end)) => Some(end),
+        }
     }
 
     /// Relation without any identifier

@@ -1,0 +1,4 @@
+f33764b8:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_sample.orders VALUES (4, '2025-01-02 00:00:00 +00:00'), (5, '2025-01-10 00:00:00 +00:00')

@@ -1,0 +1,20 @@
+84bdc9d1:
+- sequence: 0
+  type: execute
+  sql: USE DATABASE development
+8ff4d934:
+- sequence: 0
+  type: execute
+  sql: CREATE OR ALTER SCHEMA development.adapters_snowflake_custom_incremental_dynamic_table_sample
+9295ff32:
+- sequence: 0
+  type: execute
+  sql: DROP DYNAMIC TABLE IF EXISTS development.adapters_snowflake_custom_incremental_dynamic_table_sample.orders_merge
+b7f1b5a8:
+- sequence: 0
+  type: execute
+  sql: CREATE OR REPLACE TABLE development.adapters_snowflake_custom_incremental_dynamic_table_sample.orders (order_id int, ordered_at timestamp_tz) CHANGE_TRACKING = TRUE
+e545d534:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_sample.orders VALUES (1, '2025-01-01 12:00:00 +00:00'), (2, '2024-12-20 00:00:00 +00:00'), (3, '2025-01-05 00:00:00 +00:00')

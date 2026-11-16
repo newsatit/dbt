@@ -610,6 +610,33 @@ async fn adapters_snowflake_custom_incremental_dynamic_table_widened_column() ->
     .await
 }
 
+/// A merge CI DT built with `--sample`: the window filters its change rows, is stored in its
+/// definition (later plain runs keep it), and `--full-refresh` without `--sample` clears it.
+#[dbt_runtime::test]
+async fn adapters_snowflake_custom_incremental_dynamic_table_sample() -> FsResult<()> {
+    run_fs_record_replay_task_seq(
+        env!("CARGO_MANIFEST_DIR"),
+        &FS_RUNNER,
+        current_function_name!(),
+        "tests/data/adapter/custom_incremental_dynamic_table_sample",
+        AdapterType::Snowflake.as_ref(),
+        None,
+        &[
+            "run-operation set_up",
+            "run --sample {{'end': '2025-01-03', 'start': '2025-01-01'}}", // run_1: sampled build
+            "test --select orders_merge_after_sample",                     // run_2
+            "run-operation apply_changes",                                 // run_3
+            "run", // run_4: no-op build, the refresh keeps the stored window
+            "test --select orders_merge_after_refresh", // run_5
+            "run --full-refresh", // run_6: rebuilt unsampled
+            "test --select orders_merge_after_full_refresh", // run_7
+        ],
+        None,
+        &[],
+    )
+    .await
+}
+
 /// A custom incremental dynamic table with `snowflake_dynamic_table_create_or_alter` on: model SQL
 /// edits deploy through CREATE OR ALTER (for changes made after them), a switch to a regular
 /// dynamic table and back replaces.

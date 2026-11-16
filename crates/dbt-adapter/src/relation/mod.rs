@@ -77,6 +77,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_sample_predicate_is_the_bare_window() {
+        let relation = Relation::new(
+            AdapterType::Snowflake,
+            None::<String>,
+            None::<String>,
+            "my_table".to_owned(),
+        )
+        .with_quoting(ResolvedQuoting::disabled());
+        let start = NaiveDate::from_ymd_opt(2024, 7, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let sampled = RunFilter {
+            empty: false,
+            sample: Some(Sample {
+                start: Some(DateTime::<Utc>::from_naive_utc_and_offset(start, Utc)),
+                end: None,
+            }),
+        };
+        let event_time = Some("created_at".to_string());
+
+        assert_eq!(
+            relation.sample_predicate(&sampled, &event_time).as_deref(),
+            Some("created_at >= to_timestamp_tz('2024-07-01T00:00:00+00:00')")
+        );
+        assert_eq!(relation.sample_predicate(&sampled, &None), None);
+        let empty_only = RunFilter {
+            empty: true,
+            sample: None,
+        };
+        assert_eq!(relation.sample_predicate(&empty_only, &event_time), None);
+    }
+
     // Regression for dbt-labs/dbt-fusion#1608: the source-side event-time
     // predicate on Snowflake must emit the explicit `+00:00` UTC offset so it
     // resolves consistently with the microbatch DELETE predicate in non-UTC

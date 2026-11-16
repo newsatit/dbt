@@ -982,6 +982,8 @@ object:
       type: relation.incorporate
     - name: render
       type: relation.render
+    - name: sample_filter
+      type: relation.sample_filter
     - name: create
       type: relation.create
     - name: without_identifier
@@ -1073,6 +1075,12 @@ object:
   call:
     arguments: []
     return-type: string
+---
+object:
+  id: relation.sample_filter
+  call:
+    arguments: []
+    return-type: optional[string]
 ---
 object:
   id: relation.without_identifier

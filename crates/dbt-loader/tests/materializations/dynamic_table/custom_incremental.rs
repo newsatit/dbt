@@ -479,6 +479,24 @@ fn ci_empty_run_with_hand_written_changes_is_not_rewritten() {
 }
 
 #[test]
+fn ci_sample_run_keeps_the_window_after_changes() {
+    // `{{ changes() }}` under --sample filters after CHANGES. Discovery bounds the clause before
+    // the filter; the stored body keeps the window, as a regular dynamic table's does.
+    let fixture = fixture(None, RemoteState::default());
+    let sql = "select o.id from (select * from RAW.PUBLIC.ORDERS changes(information => DEFAULT) where ts >= to_timestamp_tz('2024-07-01T00:00:00+00:00')) as o";
+    render_sql(&fixture, &ci_local_config(), sql, false, "apply").expect("CI DT should render");
+
+    let executed = fixture.executed();
+    assert_eq!(
+        executed[0],
+        format!(
+            "create or replace temporary table {CI_TEMP_RELATION} as ( select * from ( select o.id from (select * from RAW.PUBLIC.ORDERS changes(information => DEFAULT) at(offset => 0) where ts >= to_timestamp_tz('2024-07-01T00:00:00+00:00')) as o ) limit 0 ) ;"
+        )
+    );
+    assert_eq!(executed[1], ci_ddl("create", &ci_merge_body(sql)));
+}
+
+#[test]
 fn ci_empty_run_leaves_the_changes_macro_form_alone() {
     // `{{ changes() }}` renders its own empty form; only discovery's start point is added.
     let fixture = fixture(None, RemoteState::default());

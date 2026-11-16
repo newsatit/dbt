@@ -4,9 +4,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use chrono::{TimeZone, Utc};
 use dbt_adapter::relation::{RelationObject, create_relation};
 use dbt_adapter_core::AdapterType;
-use dbt_schemas::filter::RunFilter;
+use dbt_schemas::filter::{RunFilter, Sample};
 use dbt_schemas::schemas::relations::SNOWFLAKE_RESOLVED_QUOTING;
 use minijinja::Value;
 
@@ -45,6 +46,15 @@ fn render(template: &str, model_keys: &[(&str, Value)]) -> Result<String, String
 
 /// The `RAW.PUBLIC.ORDERS` relation `source()` returns, with `--empty`'s run filter when `empty`.
 fn orders_relation(empty: bool) -> Value {
+    let run_filter = empty.then_some(RunFilter {
+        empty: true,
+        sample: None,
+    });
+    filtered_orders(run_filter, None)
+}
+
+/// The `RAW.PUBLIC.ORDERS` relation with `run_filter` and `event_time`, as `source()` returns it.
+fn filtered_orders(run_filter: Option<RunFilter>, event_time: Option<&str>) -> Value {
     let relation = Arc::from(
         create_relation(
             AdapterType::Snowflake,
@@ -56,19 +66,44 @@ fn orders_relation(empty: bool) -> Value {
         )
         .expect("create_relation"),
     );
-    let object = if empty {
-        RelationObject::new_with_filter(
-            relation,
-            RunFilter {
-                empty: true,
-                sample: None,
-            },
-            None,
-        )
-    } else {
-        RelationObject::new(relation)
+    match run_filter {
+        Some(run_filter) => {
+            RelationObject::new_with_filter(relation, run_filter, event_time.map(str::to_string))
+        }
+        None => RelationObject::new(relation),
+    }
+    .into_value()
+}
+
+/// `--sample`'s run filter for 2024-07-01 to 2024-07-08, `--empty` too when `empty`.
+fn sample_filter(empty: bool) -> RunFilter {
+    let day = |d| {
+        Utc.with_ymd_and_hms(2024, 7, d, 0, 0, 0)
+            .single()
+            .expect("valid date")
     };
-    object.into_value()
+    RunFilter {
+        empty,
+        sample: Some(Sample {
+            start: Some(day(1)),
+            end: Some(day(8)),
+        }),
+    }
+}
+
+/// The context of a `dbt run --sample` (`--empty` too when `empty`), on a source whose
+/// event_time is `event_time`.
+fn sample_context(empty: bool, event_time: Option<&str>) -> BTreeMap<String, Value> {
+    BTreeMap::from([
+        (
+            "orders".to_string(),
+            filtered_orders(Some(sample_filter(empty)), event_time),
+        ),
+        (
+            "flags".to_string(),
+            Value::from_serialize(BTreeMap::from([("EMPTY", empty)])),
+        ),
+    ])
 }
 
 /// The context of a `dbt run`, `--empty` when `empty`: `orders` is the source relation.
@@ -136,6 +171,52 @@ fn empty_run_filters_after_changes() {
     assert_eq!(
         render_with("{{ changes(orders, 'default') }} as o", run_context(true)).unwrap(),
         "(select * from RAW.PUBLIC.ORDERS changes(information => DEFAULT) limit 0) as o"
+    );
+}
+
+#[test]
+fn sample_run_filters_after_changes() {
+    // Under --sample the relation renders as a filtered subquery, which CHANGES can't follow; the
+    // same window applies after CHANGES instead.
+    let window = "ts >= to_timestamp_tz('2024-07-01T00:00:00+00:00') and ts < to_timestamp_tz('2024-07-08T00:00:00+00:00')";
+    assert_eq!(
+        render_with("{{ orders }}", sample_context(false, Some("ts"))).unwrap(),
+        format!("(select * from RAW.PUBLIC.ORDERS where {window})")
+    );
+    assert_eq!(
+        render_with(
+            "{{ changes(orders, 'default') }} as o",
+            sample_context(false, Some("ts"))
+        )
+        .unwrap(),
+        format!(
+            "(select * from RAW.PUBLIC.ORDERS changes(information => DEFAULT) where {window}) as o"
+        )
+    );
+}
+
+#[test]
+fn empty_sample_run_stays_zero_row() {
+    assert_eq!(
+        render_with(
+            "{{ changes(orders, 'default') }}",
+            sample_context(true, Some("ts"))
+        )
+        .unwrap(),
+        "(select * from RAW.PUBLIC.ORDERS changes(information => DEFAULT) limit 0)"
+    );
+}
+
+#[test]
+fn sample_run_without_event_time_is_unfiltered() {
+    // A source without event_time isn't sampled, as for `{{ source() }}` itself.
+    assert_eq!(
+        render_with(
+            "{{ changes(orders, 'default') }}",
+            sample_context(false, None)
+        )
+        .unwrap(),
+        "RAW.PUBLIC.ORDERS changes(information => DEFAULT)"
     );
 }
 

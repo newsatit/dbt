@@ -120,6 +120,17 @@ impl RelationObject {
         self.event_time.as_deref()
     }
 
+    /// The `event_time` window this relation renders with, as a bare predicate, for SQL that has
+    /// to filter after the table name rather than wrap it (Snowflake's `CHANGES` must directly
+    /// follow a table). None without a window or an `event_time`.
+    fn sample_filter(&self) -> Value {
+        self.run_filter
+            .as_ref()
+            .and_then(|run_filter| self.sample_predicate(run_filter, &self.event_time))
+            .map(Value::from)
+            .unwrap_or_else(none_value)
+    }
+
     /// Databricks: enrich relation with constraints (for get_column_and_constraints_sql)
     fn relation_enrich(self: &Arc<Self>, args: &[Value]) -> Result<Value, minijinja::Error> {
         let dbx = self
@@ -241,6 +252,7 @@ impl Object for RelationObject {
                 self.get(&key, default)
             }
             "render" => Ok(render_without_filter(self)),
+            "sample_filter" => Ok(self.sample_filter()),
             "derivative" => {
                 let iter = ArgsIter::new("derivative", &["suffix", "relation_type"], args);
                 let suffix = iter.next_arg::<&str>()?;
