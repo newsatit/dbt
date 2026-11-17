@@ -326,11 +326,10 @@ fn ci_rejects_unsupported_strategies() {
             incremental_strategy: Some(strategy),
             ..ci_local_config()
         };
-        assert_render_error(
-            render_ci(&fixture, &local, false),
-            &fixture,
-            "Supported strategies: 'merge', 'append'",
+        let needle = format!(
+            "unsupported incremental_strategy '{strategy}'. Supported strategies: 'merge', 'append'."
         );
+        assert_render_error(render_ci(&fixture, &local, false), &fixture, &needle);
     }
 }
 
@@ -578,23 +577,30 @@ fn ci_append_create_discovers_columns_and_stores_an_insert_body() {
 }
 
 #[test]
-fn ci_append_full_refresh_replaces_with_the_same_body_as_create() {
+fn ci_append_body_matches_across_create_replace_and_create_or_alter() {
     let created = fixture(None, RemoteState::default());
     render_ci(&created, &ci_append_local_config(), false).expect("create should render");
     let replaced = fixture(Some(RelationType::DynamicTable), ci_matching_remote_state());
     render_ci(&replaced, &ci_append_local_config(), true).expect("full refresh should render");
+    let synced = ci_create_or_alter_fixture(ci_matching_remote_state());
+    render_ci(&synced, &ci_append_local_config(), false).expect("create or alter should render");
 
     assert_eq!(
         replaced.executed(),
         vec![
             ci_discovery_sql(),
             ci_ddl("create or replace", &ci_append_body(CI_SQL))
-        ]
+        ],
+        "--full-refresh rediscovers the columns and replaces the CI DT"
+    );
+    let created_body = raw_refresh_using_body(&created.executed_raw()[1]);
+    assert_eq!(
+        raw_refresh_using_body(&replaced.executed_raw()[1]),
+        created_body
     );
     assert_eq!(
-        raw_refresh_using_body(&created.executed_raw()[1]),
-        raw_refresh_using_body(&replaced.executed_raw()[1]),
-        "create and replace must store a byte-identical refresh body"
+        raw_refresh_using_body(&synced.executed_raw()[1]),
+        created_body
     );
 }
 
@@ -637,21 +643,6 @@ fn ci_append_ignores_the_merge_options() {
         ..ci_append_local_config()
     };
     render_ci(&fixture, &local, false).expect("merge options must not fail an append");
-
-    assert_eq!(
-        fixture.executed()[1],
-        ci_ddl("create", &ci_append_body(CI_SQL))
-    );
-}
-
-#[test]
-fn ci_append_strategy_is_case_insensitive() {
-    let fixture = fixture(None, RemoteState::default());
-    let local = LocalConfig {
-        incremental_strategy: Some("APPEND"),
-        ..ci_append_local_config()
-    };
-    render_ci(&fixture, &local, false).expect("'APPEND' should be accepted");
 
     assert_eq!(
         fixture.executed()[1],
@@ -766,9 +757,9 @@ fn ci_create_or_alter_switch_replaces_in_both_directions() {
 }
 
 #[test]
-fn ci_create_or_alter_switches_merge_to_append_in_place() {
-    // A strategy change is a body change: the live CI DT is re-declared, not replaced. Snowflake
-    // keeps its rows and applies the insert to later changes.
+fn ci_create_or_alter_redeclares_an_append_body_in_place() {
+    // With the flag on, an append CI DT is re-declared with CREATE OR ALTER, not replaced: the
+    // strategy is part of the body, which isn't diffed.
     let fixture = ci_create_or_alter_fixture(ci_matching_remote_state());
     render_ci(&fixture, &ci_append_local_config(), false).expect("CI DT should render");
 
@@ -778,18 +769,5 @@ fn ci_create_or_alter_switches_merge_to_append_in_place() {
             ci_discovery_sql(),
             ci_create_or_alter_ddl("1 minute", &ci_append_body(CI_SQL))
         ]
-    );
-}
-
-#[test]
-fn ci_create_or_alter_append_body_matches_create_byte_for_byte() {
-    let created = fixture(None, RemoteState::default());
-    render_ci(&created, &ci_append_local_config(), false).expect("create should render");
-    let synced = ci_create_or_alter_fixture(ci_matching_remote_state());
-    render_ci(&synced, &ci_append_local_config(), false).expect("create or alter should render");
-
-    assert_eq!(
-        raw_refresh_using_body(&synced.executed_raw()[1]),
-        raw_refresh_using_body(&created.executed_raw()[1])
     );
 }

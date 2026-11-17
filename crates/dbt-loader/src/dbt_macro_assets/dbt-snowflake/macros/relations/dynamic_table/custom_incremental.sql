@@ -178,8 +178,8 @@ when not matched{% if delete_condition %} and not coalesce({{ delete_condition }
 {% macro snowflake__custom_incremental_append_sql(sql, columns) -%}
 {#-
     The model SQL is wrapped in a subquery, as for merge: a CI DT body cannot start with WITH.
-    The insert names its columns and selects them by name, so no value lands in another column by
-    position.
+    The insert names and selects the discovered columns, so the body does not depend on the
+    model's column order.
 -#}
     {%- set column_list = columns | map(attribute='quoted') | join(', ') -%}
 insert into SELF ({{ column_list }})
