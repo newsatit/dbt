@@ -31,10 +31,12 @@
   {% do adapter.execute('UPDATE ' ~ _fq() ~ '.stock SET qty = 6 WHERE sku_id = 1') %}
 {% endmacro %}
 
-{# Round 2: an event_id seen before (a merge would update it, an append adds a row), another
+{# Round 2: an event_id seen before (a merge would update it, an append adds a row), a delete of
+   an event already appended (APPEND_ONLY ignores it; a rebuild would drop the row), another user
    delete, another stock change. #}
 {% macro apply_more_changes() %}
   {% do adapter.execute('INSERT INTO ' ~ _fq() ~ '.events VALUES (4, 20), (1, 10)') %}
+  {% do adapter.execute('DELETE FROM ' ~ _fq() ~ '.events WHERE event_id = 3') %}
   {% do adapter.execute('DELETE FROM ' ~ _fq() ~ '.users WHERE user_id = 3') %}
   {% do adapter.execute('UPDATE ' ~ _fq() ~ '.stock SET qty = 8 WHERE sku_id = 2') %}
 {% endmacro %}
@@ -68,7 +70,7 @@
       'after_full_refresh': "(1, 20, 'b'), (3, 10, 'a2')",
       'after_switch': "(1, 20, 'b'), (3, 10, 'a2'), (4, 20, 'b'), (1, 10, 'a2')",
   }[stage] %}
-  {{ _check(stage ~ ": events_enriched holds each event with the label at its arrival", _same_rows(
+  {{ _check(stage ~ ": events_enriched holds each event with the label at the refresh that appended it", _same_rows(
       "select event_id, campaign_id, label from " ~ fq ~ ".events_enriched",
       "select column1, column2, column3 from values " ~ enriched)) }}
 

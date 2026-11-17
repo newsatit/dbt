@@ -6,6 +6,10 @@
 - sequence: 0
   type: execute
   sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_append.events VALUES (4, 20), (1, 10)
+f669f8f3:
+- sequence: 0
+  type: execute
+  sql: DELETE FROM development.adapters_snowflake_custom_incremental_dynamic_table_append.events WHERE event_id = 3
 fb2bc992:
 - sequence: 0
   type: execute
