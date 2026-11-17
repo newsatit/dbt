@@ -1,0 +1,8 @@
+sources:
+  - name: raw
+    schema: "{{ target.schema }}"
+    tables:
+      - name: events
+      - name: campaigns
+      - name: users
+      - name: stock

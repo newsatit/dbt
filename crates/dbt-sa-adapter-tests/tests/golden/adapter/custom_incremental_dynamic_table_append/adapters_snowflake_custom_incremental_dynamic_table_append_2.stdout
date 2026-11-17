@@ -1,0 +1,9 @@
+   dbt-oss 
+   Loading profiles.yml
+   Parsing models/sources.yml
+   Parsing models/deleted_users.sql
+   Parsing models/events_enriched.sql
+   Parsing models/events_switch.sql
+   Parsing models/stock_snapshots.sql
+==================== Execution Summary =====================
+Finished 'run-operation' successfully for target 'snowflake' [duration]

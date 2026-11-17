@@ -1,0 +1,12 @@
+7ef9307a:
+- sequence: 0
+  type: execute
+  sql: DELETE FROM development.adapters_snowflake_custom_incremental_dynamic_table_append.users WHERE user_id = 3
+9093a4ac:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_append.events VALUES (4, 20), (1, 10)
+fb2bc992:
+- sequence: 0
+  type: execute
+  sql: UPDATE development.adapters_snowflake_custom_incremental_dynamic_table_append.stock SET qty = 8 WHERE sku_id = 2

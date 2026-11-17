@@ -1,0 +1,13 @@
+flags:
+  send_anonymous_usage_stats: false
+name: test
+profile: fusion_tests
+
+macro-paths: ["macros"]
+
+vars:
+  switch_to_append: false
+
+models:
+  test:
+    +static_analysis: off

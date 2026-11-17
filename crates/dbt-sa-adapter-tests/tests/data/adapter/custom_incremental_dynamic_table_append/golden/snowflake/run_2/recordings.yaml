@@ -1,0 +1,36 @@
+18fd4beb:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_append.users VALUES (4, 'u4')
+4a1d5072:
+- sequence: 0
+  type: execute
+  sql: DELETE FROM development.adapters_snowflake_custom_incremental_dynamic_table_append.users WHERE user_id = 1
+6fca0c55:
+- sequence: 0
+  type: execute
+  sql: UPDATE development.adapters_snowflake_custom_incremental_dynamic_table_append.users SET user_name = 'u2b' WHERE user_id = 2
+753cdcae:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_append.events VALUES (3, 10)
+93e6060b:
+- sequence: 0
+  type: execute
+  sql: DELETE FROM development.adapters_snowflake_custom_incremental_dynamic_table_append.users WHERE user_id = 4
+a0396736:
+- sequence: 0
+  type: execute
+  sql: UPDATE development.adapters_snowflake_custom_incremental_dynamic_table_append.campaigns SET label = 'a2' WHERE campaign_id = 10
+c46d9de6:
+- sequence: 0
+  type: execute
+  sql: UPDATE development.adapters_snowflake_custom_incremental_dynamic_table_append.events SET campaign_id = 20 WHERE event_id = 1
+e8ab9b60:
+- sequence: 0
+  type: execute
+  sql: DELETE FROM development.adapters_snowflake_custom_incremental_dynamic_table_append.events WHERE event_id = 2
+f0fff873:
+- sequence: 0
+  type: execute
+  sql: UPDATE development.adapters_snowflake_custom_incremental_dynamic_table_append.stock SET qty = 6 WHERE sku_id = 1
