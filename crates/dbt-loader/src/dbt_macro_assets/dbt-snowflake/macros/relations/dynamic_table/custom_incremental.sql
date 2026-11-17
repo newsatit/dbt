@@ -17,7 +17,7 @@
 {% macro snowflake__custom_incremental_strategies() -%}
     {#- Each strategy has a `snowflake__validate_custom_incremental_<strategy>_config` check and a
         branch in `snowflake__custom_incremental_refresh_using_sql`. -#}
-    {{ return(['merge']) }}
+    {{ return(['merge', 'append']) }}
 {%- endmacro %}
 
 
@@ -56,6 +56,8 @@
 
     {%- if strategy == 'merge' -%}
         {% do snowflake__validate_custom_incremental_merge_config() %}
+    {%- elif strategy == 'append' -%}
+        {% do snowflake__validate_custom_incremental_append_config() %}
     {%- endif -%}
 {%- endmacro %}
 
@@ -72,6 +74,18 @@
     {%- if delete_condition and 'dbt_internal_dest' in delete_condition | lower -%}
         {% do exceptions.raise_compiler_error(
             "Dynamic table `" ~ this ~ "`: with incremental_strategy='merge', `delete_condition` is tested against the incoming row, so it must reference DBT_INTERNAL_SOURCE, not DBT_INTERNAL_DEST."
+        ) %}
+    {%- endif -%}
+{%- endmacro %}
+
+
+-- funcsign: () -> string
+{% macro snowflake__validate_custom_incremental_append_config() -%}
+    {#- `unique_key`, `merge_update_columns` and `merge_exclude_columns` are ignored, as for an
+        incremental append. -#}
+    {%- if config.get('delete_condition') -%}
+        {% do exceptions.raise_compiler_error(
+            "Dynamic table `" ~ this ~ "` sets `delete_condition`, which incremental_strategy='append' does not support: an append has no delete step."
         ) %}
     {%- endif -%}
 {%- endmacro %}
@@ -124,6 +138,8 @@
     {%- set strategy = snowflake__custom_incremental_strategy() -%}
     {%- if strategy == 'merge' -%}
         {{ snowflake__custom_incremental_merge_sql(sql, columns) }}
+    {%- elif strategy == 'append' -%}
+        {{ snowflake__custom_incremental_append_sql(sql, columns) }}
     {%- else -%}
         {% do exceptions.raise_compiler_error("Unexpected custom incremental strategy '" ~ strategy ~ "' for " ~ this) %}
     {%- endif -%}
@@ -155,4 +171,20 @@ when matched and coalesce({{ delete_condition }}, false) then delete
 {%- endif %}
 when matched then update set {% for name in update_columns %}{{ name }} = DBT_INTERNAL_SOURCE.{{ name }}{% if not loop.last %}, {% endif %}{% endfor %}
 when not matched{% if delete_condition %} and not coalesce({{ delete_condition }}, false){% endif %} then insert ({{ column_names | join(', ') }}) values ({% for name in column_names %}DBT_INTERNAL_SOURCE.{{ name }}{% if not loop.last %}, {% endif %}{% endfor %})
+{%- endmacro %}
+
+
+-- funcsign: (string, list[base_column]) -> string
+{% macro snowflake__custom_incremental_append_sql(sql, columns) -%}
+{#-
+    The model SQL is wrapped in a subquery, as for merge: a CI DT body cannot start with WITH.
+    The insert names its columns and selects them by name, so no value lands in another column by
+    position.
+-#}
+    {%- set column_list = columns | map(attribute='quoted') | join(', ') -%}
+insert into SELF ({{ column_list }})
+select {{ column_list }}
+from (
+{{ sql }}
+) as DBT_INTERNAL_SOURCE
 {%- endmacro %}

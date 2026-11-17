@@ -49,6 +49,25 @@ fn ci_merge_body(sql: &str) -> String {
     )
 }
 
+/// The discovered columns, as the insert names and selects them.
+const CI_COLUMN_LIST: &str = r#""ID", "AMOUNT", "IS_DELETED""#;
+
+/// An append CI DT with a refreshing schedule.
+fn ci_append_local_config() -> LocalConfig {
+    LocalConfig {
+        incremental_strategy: Some("append"),
+        unique_key: None,
+        ..ci_local_config()
+    }
+}
+
+/// The stored append body for [`ci_append_local_config`].
+fn ci_append_body(sql: &str) -> String {
+    format!(
+        "insert into SELF ({CI_COLUMN_LIST}) select {CI_COLUMN_LIST} from ( {sql} ) as DBT_INTERNAL_SOURCE"
+    )
+}
+
 fn ci_ddl(verb: &str, body: &str) -> String {
     format!(
         "{verb} dynamic table {RENDERED_RELATION} {CI_COLUMNS_DDL} target_lag = '1 minute' warehouse = WH refresh_mode = CUSTOM_INCREMENTAL initialize = ON_CREATE scheduler = 'ENABLE' refresh using ( {body} )"
@@ -300,8 +319,8 @@ fn ci_requires_an_incremental_strategy() {
 }
 
 #[test]
-fn ci_rejects_strategies_other_than_merge() {
-    for strategy in ["append", "delete+insert", "microbatch"] {
+fn ci_rejects_unsupported_strategies() {
+    for strategy in ["delete+insert", "microbatch", "insert_overwrite"] {
         let fixture = fixture(None, RemoteState::default());
         let local = LocalConfig {
             incremental_strategy: Some(strategy),
@@ -310,7 +329,7 @@ fn ci_rejects_strategies_other_than_merge() {
         assert_render_error(
             render_ci(&fixture, &local, false),
             &fixture,
-            "unsupported incremental_strategy",
+            "Supported strategies: 'merge', 'append'",
         );
     }
 }
@@ -540,6 +559,107 @@ fn ci_rejects_immutable_where() {
 }
 
 // ---------------------------------------------------------------------------
+// incremental_strategy='append'
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ci_append_create_discovers_columns_and_stores_an_insert_body() {
+    let fixture = fixture(None, RemoteState::default());
+    render_ci(&fixture, &ci_append_local_config(), false).expect("CI DT should render");
+
+    assert_eq!(
+        fixture.executed(),
+        vec![
+            ci_discovery_sql(),
+            ci_ddl("create", &ci_append_body(CI_SQL))
+        ],
+        "an append build discovers the columns like merge, then inserts them by name"
+    );
+}
+
+#[test]
+fn ci_append_full_refresh_replaces_with_the_same_body_as_create() {
+    let created = fixture(None, RemoteState::default());
+    render_ci(&created, &ci_append_local_config(), false).expect("create should render");
+    let replaced = fixture(Some(RelationType::DynamicTable), ci_matching_remote_state());
+    render_ci(&replaced, &ci_append_local_config(), true).expect("full refresh should render");
+
+    assert_eq!(
+        replaced.executed(),
+        vec![
+            ci_discovery_sql(),
+            ci_ddl("create or replace", &ci_append_body(CI_SQL))
+        ]
+    );
+    assert_eq!(
+        raw_refresh_using_body(&created.executed_raw()[1]),
+        raw_refresh_using_body(&replaced.executed_raw()[1]),
+        "create and replace must store a byte-identical refresh body"
+    );
+}
+
+#[test]
+fn ci_append_model_starting_with_a_cte_is_wrapped_in_a_subquery() {
+    // A CI DT body can't start with WITH; inside the subquery it is accepted.
+    let fixture = fixture(None, RemoteState::default());
+    let sql = "with deleted as (select * from RAW.PUBLIC.USERS changes(information => DEFAULT) where METADATA$ACTION = 'DELETE') select * from deleted";
+    render_sql(&fixture, &ci_append_local_config(), sql, false, "apply")
+        .expect("CI DT should render");
+
+    assert_eq!(
+        fixture.executed()[1],
+        ci_ddl("create", &ci_append_body(sql))
+    );
+}
+
+#[test]
+fn ci_append_rejects_a_delete_condition() {
+    let fixture = fixture(None, RemoteState::default());
+    let local = LocalConfig {
+        delete_condition: Some("DBT_INTERNAL_SOURCE.is_deleted"),
+        ..ci_append_local_config()
+    };
+    assert_render_error(
+        render_ci(&fixture, &local, false),
+        &fixture,
+        "an append has no delete step",
+    );
+}
+
+#[test]
+fn ci_append_ignores_the_merge_options() {
+    // As for an incremental append: a model can move from merge to append without editing these.
+    let fixture = fixture(None, RemoteState::default());
+    let local = LocalConfig {
+        unique_key: Some(Value::from("id")),
+        merge_update_columns: Some(Value::from(vec!["amount"])),
+        merge_exclude_columns: Some(Value::from(vec!["is_deleted"])),
+        ..ci_append_local_config()
+    };
+    render_ci(&fixture, &local, false).expect("merge options must not fail an append");
+
+    assert_eq!(
+        fixture.executed()[1],
+        ci_ddl("create", &ci_append_body(CI_SQL))
+    );
+}
+
+#[test]
+fn ci_append_strategy_is_case_insensitive() {
+    let fixture = fixture(None, RemoteState::default());
+    let local = LocalConfig {
+        incremental_strategy: Some("APPEND"),
+        ..ci_append_local_config()
+    };
+    render_ci(&fixture, &local, false).expect("'APPEND' should be accepted");
+
+    assert_eq!(
+        fixture.executed()[1],
+        ci_ddl("create", &ci_append_body(CI_SQL))
+    );
+}
+
+// ---------------------------------------------------------------------------
 // With `snowflake_dynamic_table_create_or_alter` on
 // ---------------------------------------------------------------------------
 
@@ -642,5 +762,34 @@ fn ci_create_or_alter_switch_replaces_in_both_directions() {
         vec![format!(
             "create or replace dynamic table {RENDERED_RELATION} target_lag = '1 minute' warehouse = WH refresh_mode = AUTO initialize = ON_CREATE scheduler = 'ENABLE' as ( {MODEL_SQL} )"
         )]
+    );
+}
+
+#[test]
+fn ci_create_or_alter_switches_merge_to_append_in_place() {
+    // A strategy change is a body change: the live CI DT is re-declared, not replaced. Snowflake
+    // keeps its rows and applies the insert to later changes.
+    let fixture = ci_create_or_alter_fixture(ci_matching_remote_state());
+    render_ci(&fixture, &ci_append_local_config(), false).expect("CI DT should render");
+
+    assert_eq!(
+        fixture.executed(),
+        vec![
+            ci_discovery_sql(),
+            ci_create_or_alter_ddl("1 minute", &ci_append_body(CI_SQL))
+        ]
+    );
+}
+
+#[test]
+fn ci_create_or_alter_append_body_matches_create_byte_for_byte() {
+    let created = fixture(None, RemoteState::default());
+    render_ci(&created, &ci_append_local_config(), false).expect("create should render");
+    let synced = ci_create_or_alter_fixture(ci_matching_remote_state());
+    render_ci(&synced, &ci_append_local_config(), false).expect("create or alter should render");
+
+    assert_eq!(
+        raw_refresh_using_body(&synced.executed_raw()[1]),
+        raw_refresh_using_body(&created.executed_raw()[1])
     );
 }
