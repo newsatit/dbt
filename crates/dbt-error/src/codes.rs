@@ -1,6 +1,7 @@
 // use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{collections::HashMap, fmt::Display};
 
+use dbt_proc_macros::DebugNoInline;
 use dbt_proc_macros::include_frontend_error_codes;
 use strum_macros::{EnumString, FromRepr, IntoStaticStr};
 
@@ -11,7 +12,9 @@ use strum_macros::{EnumString, FromRepr, IntoStaticStr};
 #[include_frontend_error_codes]
 #[repr(u16)]
 #[non_exhaustive]
-#[derive(Debug, Copy, Clone, Eq, PartialEq, FromRepr, EnumString, IntoStaticStr, Default)]
+#[derive(
+    DebugNoInline, Copy, Clone, Eq, PartialEq, FromRepr, EnumString, IntoStaticStr, Default,
+)]
 pub enum ErrorCode {
     // ----------------- Frontend errors [0, 999] -----------------------------
     //
@@ -154,6 +157,9 @@ pub enum ErrorCode {
     ConstraintNotEnforced = 1109,
     /// A constraint type is not supported by the adapter at all and is dropped from the rendered DDL.
     ConstraintNotSupported = 1110,
+    /// `refresh_mode='CUSTOM_INCREMENTAL'` on a Snowflake model that isn't a `dynamic_table`,
+    /// where the materialization ignores it.
+    CustomIncrementalOutsideDynamicTable = 1111,
 
     // --------------------------------------------------------------------------------------------
     // CLI args/config [1100–1149]
@@ -388,6 +394,9 @@ pub enum ErrorCode {
     /// No longer emitted. Retained so an existing `warn_error_options` entry naming it
     /// keeps resolving instead of failing as an unknown code.
     DocsGenerateWarning = 1705,
+    /// A node's column facts could not be inferred, so tests that they would
+    /// have let dbt skip run instead.
+    TestFactsInferenceFailed = 1706,
 
     // --------------------------------------------------------------------------------------------
     // Format
@@ -451,6 +460,9 @@ pub enum ErrorCode {
     // --------------------------------------------------------------------------------------------
     // Lineage
     InvalidLineageSchema = 3500,
+    /// A column whose relation `--infer-schemas` inferred matches more than one
+    /// candidate relation, so column lineage through it is incomplete.
+    AmbiguousInferredColumn = 3501,
 
     // --------------------------------------------------------------------------------------------
     // SQL frontend library

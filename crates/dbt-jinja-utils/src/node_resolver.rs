@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use chrono::Utc;
 use dbt_adapter::relation::{
     RelationObject, canonical_relation_parts, create_relation, create_relation_from_node,
     create_relation_from_source,
@@ -23,7 +24,7 @@ use dbt_schemas::{
     filter::RunFilter,
     schemas::{
         DbtFunction, DbtSource, InternalDbtNodeAttributes, IntrospectionKind, Nodes,
-        common::{DbtMaterialization, DbtQuoting, ResolvedQuoting},
+        common::{DbtMaterialization, DbtQuoting, ResolvedQuoting, parse_deprecation_date},
         ref_and_source::{DbtRef, DbtSourceWrapper},
         telemetry::NodeType,
     },
@@ -41,9 +42,9 @@ fn create_ref_relation(
     if node.base().effective_propagation_target == Some(AdapterType::Databricks) {
         let (database, schema, identifier) = canonical_relation_parts(
             Some(AdapterType::Databricks),
-            &node.database(),
-            &node.schema(),
-            &node.alias(),
+            node.database(),
+            node.schema(),
+            node.alias(),
         );
         create_relation(
             node.node_adapter(),
@@ -383,14 +384,8 @@ impl NodeResolverTracker for NodeResolver {
 
         if maybe_version == maybe_latest_version {
             // Lookup by ref name
-            let ref_entry = self.refs.entry(model_name.clone()).or_default();
-            Self::push_or_replace_entry(
-                ref_entry,
-                &unique_id,
-                &relation,
-                status,
-                override_existing,
-            );
+            let ref_entry = self.refs.entry(model_name.to_string()).or_default();
+            Self::push_or_replace_entry(ref_entry, unique_id, &relation, status, override_existing);
 
             // Lookup by package and ref name
             let package_ref_entry = self
@@ -399,7 +394,7 @@ impl NodeResolverTracker for NodeResolver {
                 .or_default();
             Self::push_or_replace_entry(
                 package_ref_entry,
-                &unique_id,
+                unique_id,
                 &relation,
                 status,
                 override_existing,
@@ -417,7 +412,7 @@ impl NodeResolverTracker for NodeResolver {
                 .or_default();
             Self::push_or_replace_entry(
                 versioned_ref_entry,
-                &unique_id,
+                unique_id,
                 &relation,
                 status,
                 override_existing,
@@ -430,14 +425,14 @@ impl NodeResolverTracker for NodeResolver {
             if override_existing {
                 Self::push_or_replace_entry(
                     package_versioned_ref_entry,
-                    &unique_id,
+                    unique_id,
                     &relation,
                     status,
                     true,
                 );
             } else if !package_versioned_ref_entry
                 .iter()
-                .any(|(id, _, _, _)| id == &unique_id)
+                .any(|(id, _, _, _)| id == unique_id)
             {
                 package_versioned_ref_entry.push((
                     unique_id.to_string(),
@@ -465,10 +460,10 @@ impl NodeResolverTracker for NodeResolver {
             create_function_object_from_node(node.node_adapter(), node)?.into_value();
 
         // Lookup by function name
-        let function_entry = self.functions.entry(function_name.clone()).or_default();
+        let function_entry = self.functions.entry(function_name.to_string()).or_default();
         Self::push_or_replace_function_entry(
             function_entry,
-            &unique_id,
+            unique_id,
             &function_object,
             status,
             true,
@@ -481,7 +476,7 @@ impl NodeResolverTracker for NodeResolver {
             .or_default();
         Self::push_or_replace_function_entry(
             package_function_entry,
-            &unique_id,
+            unique_id,
             &function_object,
             status,
             true,
@@ -502,9 +497,9 @@ impl NodeResolverTracker for NodeResolver {
         let mut schema = source.base().schema.clone();
         let mut identifier = source.base().alias.clone();
         let mapper = &self.renaming;
-        if mapper.contains_key(&source.unique_id()) {
+        if mapper.contains_key(source.unique_id()) {
             // When a plan is present, remap all sources.
-            (database, schema, identifier) = mapper[&source.unique_id()].clone();
+            (database, schema, identifier) = mapper[source.unique_id()].clone();
         }
 
         let base_rel = create_relation_from_source(
@@ -835,14 +830,14 @@ impl NodeResolverTracker for NodeResolver {
             let deferred_function =
                 create_function_object_from_node(adapter_type, node)?.into_value();
 
-            let function_entry = self.functions.entry(function_name.clone()).or_default();
-            Self::set_deferred_function(function_entry, &unique_id, &deferred_function);
+            let function_entry = self.functions.entry(function_name.to_string()).or_default();
+            Self::set_deferred_function(function_entry, unique_id, &deferred_function);
 
             let package_function_entry = self
                 .functions
                 .entry(format!("{package_name}.{function_name}"))
                 .or_default();
-            Self::set_deferred_function(package_function_entry, &unique_id, &deferred_function);
+            Self::set_deferred_function(package_function_entry, unique_id, &deferred_function);
 
             return Ok(());
         }
@@ -864,10 +859,10 @@ impl NodeResolverTracker for NodeResolver {
         .into_value();
 
         if maybe_version == maybe_latest_version {
-            let ref_entry = self.refs.entry(model_name.clone()).or_default();
+            let ref_entry = self.refs.entry(model_name.to_string()).or_default();
             Self::set_deferred_relation(
                 ref_entry,
-                &unique_id,
+                unique_id,
                 &deferred_relation,
                 is_frontier,
                 node,
@@ -879,7 +874,7 @@ impl NodeResolverTracker for NodeResolver {
                 .or_default();
             Self::set_deferred_relation(
                 package_ref_entry,
-                &unique_id,
+                unique_id,
                 &deferred_relation,
                 is_frontier,
                 node,
@@ -894,7 +889,7 @@ impl NodeResolverTracker for NodeResolver {
                 .or_default();
             Self::set_deferred_relation(
                 versioned_ref_entry,
-                &unique_id,
+                unique_id,
                 &deferred_relation,
                 is_frontier,
                 node,
@@ -906,7 +901,7 @@ impl NodeResolverTracker for NodeResolver {
                 .or_default();
             Self::set_deferred_relation(
                 package_versioned_ref_entry,
-                &unique_id,
+                unique_id,
                 &deferred_relation,
                 is_frontier,
                 node,
@@ -970,8 +965,8 @@ pub fn resolve_dependencies(
     for node in nodes.iter_values_mut() {
         // Clone needed values first to avoid borrowing issues
         let node_path = node.common().path.clone();
-        let node_package_name = node.package_name();
-        let node_unique_id = node.unique_id();
+        let node_package_name = node.package_name().to_string();
+        let node_unique_id = node.unique_id().to_string();
         let is_test = node.is_test();
         let is_exposure = node.resource_type() == NodeType::Exposure;
 
@@ -1305,14 +1300,14 @@ pub fn check_for_model_deprecations(nodes: &Nodes) {
     let mut deprecated_models: BTreeMap<String, DeprecatedModelInfo> = BTreeMap::new();
 
     for (uid, model) in &nodes.models {
-        if let Some(ts) = &model.__model_attr__.deprecation_date {
-            // Instant comparison; a missing time/zone defaults to midnight UTC.
-            let is_past = *ts < dbt_yaml::Timestamp::utc_now();
+        if let Some(dep_date_str) = &model.__model_attr__.deprecation_date {
+            let is_past = parse_deprecation_date(dep_date_str)
+                .is_some_and(|deprecation_date| deprecation_date < Utc::now());
             deprecated_models.insert(
                 uid.clone(),
                 DeprecatedModelInfo {
                     is_past,
-                    deprecation_date: ts.with_defaults().to_string(),
+                    deprecation_date: dep_date_str.clone(),
                     name: model.__common_attr__.name.clone(),
                     version: model.__model_attr__.version.as_ref().map(|v| v.to_string()),
                     latest_version: model
@@ -1415,8 +1410,8 @@ pub fn create_function_object_from_node(
 ) -> FsResult<FunctionObject> {
     let relation = create_relation(
         adapter_type,
-        node.database(),
-        node.schema(),
+        node.database().to_string(),
+        node.schema().to_string(),
         Some(node.base().alias.clone()),
         Some(RelationType::from(node.materialized())),
         node.quoting(),
@@ -1463,7 +1458,7 @@ mod tests {
                 ..Default::default()
             },
             __model_attr__: DbtModelAttr {
-                deprecation_date: deprecation_date.and_then(dbt_yaml::Timestamp::parse),
+                deprecation_date: deprecation_date.map(|s| s.to_string()),
                 ..Default::default()
             },
             ..Default::default()

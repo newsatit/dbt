@@ -1302,7 +1302,7 @@ pub fn nodes_from_dbt_manifest(mut manifest: DbtManifest, dbt_quoting: DbtQuotin
                             group: None,
                             state: test.config.state.clone(),
                         },
-                        __adapter_attr__: AdapterAttr::from_config_and_dialect(
+                        __adapter_attr__: AdapterAttr::from_lazy_config_and_dialect(
                             &test.config.__warehouse_specific_config__,
                             AdapterType::from_str(&manifest.metadata.adapter_type)
                                 .expect("Unknown or unsupported adapter type"),
@@ -1410,7 +1410,7 @@ pub fn nodes_from_dbt_manifest(mut manifest: DbtManifest, dbt_quoting: DbtQuotin
                                 .clone(),
                             table_format: snapshot.config.table_format.clone(),
                         },
-                        __adapter_attr__: AdapterAttr::from_config_and_dialect(
+                        __adapter_attr__: AdapterAttr::from_lazy_config_and_dialect(
                             &snapshot.config.__warehouse_specific_config__,
                             AdapterType::from_str(&manifest.metadata.adapter_type)
                                 .expect("Unknown or unsupported adapter type"),
@@ -2181,9 +2181,7 @@ pub fn manifest_model_to_dbt_model(
             version: model.version,
             latest_version: model.latest_version,
             constraints: model.constraints.unwrap_or_default(),
-            deprecation_date: model
-                .deprecation_date
-                .and_then(|raw| dbt_yaml::Timestamp::parse(&raw)),
+            deprecation_date: model.deprecation_date,
             primary_key: model.primary_key.unwrap_or_default(),
             time_spine,
             event_time: model.config.event_time.clone(),
@@ -2192,7 +2190,7 @@ pub fn manifest_model_to_dbt_model(
             sync: model.config.sync.clone(),
             compiled_code: None,
         },
-        __adapter_attr__: AdapterAttr::from_config_and_dialect(
+        __adapter_attr__: AdapterAttr::from_lazy_config_and_dialect(
             &model.config.__warehouse_specific_config__,
             AdapterType::from_str(&manifest.metadata.adapter_type)
                 .expect("Unknown or unsupported adapter type"),

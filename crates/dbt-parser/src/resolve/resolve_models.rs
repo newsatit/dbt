@@ -39,7 +39,7 @@ use dbt_common::tracing::event_info::store_event_attributes;
 use dbt_jinja_utils::jinja_environment::JinjaEnv;
 use dbt_jinja_utils::listener::JinjaTypeCheckingEventListenerFactory;
 use dbt_jinja_utils::node_resolver::NodeResolver;
-use dbt_jinja_utils::phases::parse::ParseAdapterScopes;
+use dbt_jinja_utils::phases::AdapterScopes;
 use dbt_jinja_utils::utils::dependency_package_name_from_ctx;
 use dbt_schemas::schemas::CommonAttributes;
 use dbt_schemas::schemas::DbtModel;
@@ -86,7 +86,6 @@ use dbt_schemas::state::ModelStatus;
 use dbt_schemas::state::NodeResolverTracker;
 use dbt_schemas::state::ResourcePathKind;
 use dbt_yaml::Spanned;
-use minijinja::MacroSpans;
 use minijinja::constants::CURRENT_PATH;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -178,11 +177,11 @@ pub async fn resolve_models(
     models_properties: &BTreeMap<String, MinimalPropertiesEntry>,
     database: &str,
     schema: &str,
-    parse_adapter_scopes: &Arc<ParseAdapterScopes>,
+    parse_adapter_scopes: &Arc<AdapterScopes>,
     default_adapter: AdapterType,
     package_name: &str,
     env: Arc<JinjaEnv>,
-    base_ctx: &BTreeMap<String, minijinja::Value>,
+    base_ctx: &Arc<BTreeMap<String, minijinja::Value>>,
     runtime_config: Arc<DbtRuntimeConfig>,
     root_runtime_config: Arc<DbtRuntimeConfig>,
     collected_generic_tests: &mut Vec<GenericTestAsset>,
@@ -193,13 +192,11 @@ pub async fn resolve_models(
     jinja_type_checking_event_listener_factory: Arc<dyn JinjaTypeCheckingEventListenerFactory>,
 ) -> FsResult<(
     HashMap<String, Arc<DbtModel>>,
-    HashMap<String, (String, MacroSpans)>,
     HashMap<String, Arc<DbtModel>>,
 )> {
     let mut models: HashMap<String, Arc<DbtModel>> = HashMap::new();
     let mut models_with_execute: HashMap<String, DbtModel> = HashMap::new();
     let mut disabled_models: HashMap<String, Arc<DbtModel>> = HashMap::new();
-    let mut rendering_results: HashMap<String, (String, MacroSpans)> = HashMap::new();
     let dependency_package_name = dependency_package_name_from_ctx(&env, base_ctx);
 
     let is_dependency = dependency_package_name.is_some();
@@ -239,7 +236,7 @@ pub async fn resolve_models(
             package_quoting,
             uses_snapshot_fqn: false,
             defer_render_errors_to_compile: true,
-            base_ctx: base_ctx.clone(),
+            base_ctx: Arc::clone(base_ctx),
             package_name: package_name.to_string(),
             adapter_type: default_adapter,
             database: database.to_string(),
@@ -382,7 +379,6 @@ pub async fn resolve_models(
         &mut models,
         &mut models_with_execute,
         &mut disabled_models,
-        &mut rendering_results,
         &mut duplicates,
     )
     .await?;
@@ -465,7 +461,7 @@ pub async fn resolve_models(
             .into_iter()
             .map(|(v, _)| (v.__common_attr__.unique_id.to_string(), Arc::new(v))),
     );
-    Ok((models, rendering_results, disabled_models))
+    Ok((models, disabled_models))
 }
 
 /// Builds a `DbtModel` node for each rendered model file, routing it into `models`,
@@ -502,7 +498,7 @@ async fn build_model_nodes(
     model_sql_resources_map: Vec<SqlFileRenderResult<ModelConfig, ModelProperties>>,
     database: &str,
     schema: &str,
-    parse_adapter_scopes: &ParseAdapterScopes,
+    parse_adapter_scopes: &AdapterScopes,
     default_adapter: AdapterType,
     package_name: &str,
     dependency_package_name: Option<&str>,
@@ -516,7 +512,6 @@ async fn build_model_nodes(
     models: &mut HashMap<String, Arc<DbtModel>>,
     models_with_execute: &mut HashMap<String, DbtModel>,
     disabled_models: &mut HashMap<String, Arc<DbtModel>>,
-    rendering_results: &mut HashMap<String, (String, MacroSpans)>,
     duplicates: &mut Vec<(String, String, Option<String>, PathBuf)>,
 ) -> FsResult<()> {
     let mut node_names = HashSet::new();
@@ -535,8 +530,8 @@ async fn build_model_nodes(
         adapter,
         alias_adapter,
         raw_code,
-        rendered_sql,
-        macro_spans,
+        rendered_sql: _,
+        macro_spans: _,
         properties: maybe_properties,
         status,
         render_error_deferred,
@@ -708,7 +703,7 @@ async fn build_model_nodes(
             .contract
             .as_ref()
             .is_some_and(|contract| contract.enforced)
-            && !materialization_enforces_constraints(&materialized)
+            && !materialized.enforces_constraints()
             && has_warn_unsupported_constraints(&model_constraints, &columns)
         {
             emit_warn_log_message(
@@ -764,6 +759,14 @@ async fn build_model_nodes(
             selected_adapter,
             &dbt_asset.path,
         )?;
+        if let Some(warning) = custom_incremental_outside_dynamic_table(
+            &model_config,
+            status,
+            selected_adapter,
+            &dbt_asset.path,
+        ) {
+            emit_warn_log_from_fs_error(*warning);
+        }
 
         // catalog check: a catalog_name with no match would otherwise silently materialize to the default catalog
         if model_config.enabled
@@ -950,6 +953,30 @@ async fn build_model_nodes(
             relation_owner_adapter(selected_adapter, effective_propagation_target),
         );
 
+        let column_constraint_refs = columns
+            .iter()
+            .flat_map(|col| col.constraints.iter())
+            .filter_map(|c| c.to.as_ref())
+            .filter_map(|spanned| {
+                parse_ref_from_constraint(spanned).map(|(pkg, name, version)| DbtRef {
+                    name,
+                    package: pkg,
+                    version,
+                    location: Some(CodeLocationWithFile::from(spanned.span().clone())),
+                })
+            });
+
+        let column_constraint_sources = columns
+            .iter()
+            .flat_map(|col| col.constraints.iter())
+            .filter_map(|c| c.to.as_ref())
+            .filter_map(|spanned| {
+                parse_source_from_constraint(spanned).map(|(src, tbl)| DbtSourceWrapper {
+                    source: vec![src, tbl],
+                    location: Some(CodeLocationWithFile::from(spanned.span().clone())),
+                })
+            });
+
         // Create the DbtModel with all properties already set
         let mut dbt_model = DbtModel {
             __common_attr__: CommonAttributes {
@@ -996,7 +1023,6 @@ async fn build_model_nodes(
                 compute: model_config.compute,
                 extended_model: false,
                 persist_docs: model_config.persist_docs.clone(),
-                columns,
                 depends_on: NodeDependsOn {
                     macros: macro_dependencies,
                     nodes: vec![],
@@ -1028,26 +1054,7 @@ async fn build_model_nodes(
                                 })
                             }),
                     )
-                    .chain(
-                        properties
-                            .columns
-                            .iter()
-                            .flatten()
-                            .flat_map(|col| col.constraints.iter().flatten())
-                            .filter_map(|c| c.to.as_ref())
-                            .filter_map(|spanned| {
-                                parse_ref_from_constraint(spanned).map(|(pkg, name, version)| {
-                                    DbtRef {
-                                        name,
-                                        package: pkg,
-                                        version,
-                                        location: Some(CodeLocationWithFile::from(
-                                            spanned.span().clone(),
-                                        )),
-                                    }
-                                })
-                            }),
-                    )
+                    .chain(column_constraint_refs)
                     .collect(),
                 functions: sql_file_info
                     .functions
@@ -1081,25 +1088,10 @@ async fn build_model_nodes(
                                 })
                             }),
                     )
-                    .chain(
-                        properties
-                            .columns
-                            .iter()
-                            .flatten()
-                            .flat_map(|col| col.constraints.iter().flatten())
-                            .filter_map(|c| c.to.as_ref())
-                            .filter_map(|spanned| {
-                                parse_source_from_constraint(spanned).map(|(src, tbl)| {
-                                    DbtSourceWrapper {
-                                        source: vec![src, tbl],
-                                        location: Some(CodeLocationWithFile::from(
-                                            spanned.span().clone(),
-                                        )),
-                                    }
-                                })
-                            }),
-                    )
+                    .chain(column_constraint_sources)
                     .collect(),
+                // Moved after `refs`/`sources`: their constraint iterators borrow `columns`.
+                columns,
                 metrics,
                 materialized,
                 quoting: model_config
@@ -1138,7 +1130,7 @@ async fn build_model_nodes(
                 sync: model_config.sync.clone(),
                 compiled_code: None,
             },
-            __adapter_attr__: AdapterAttr::from_config_and_dialect(
+            __adapter_attr__: AdapterAttr::from_lazy_config_and_dialect(
                 &model_config.__warehouse_specific_config__,
                 selected_adapter,
             ),
@@ -1167,9 +1159,9 @@ async fn build_model_nodes(
 
         // Update time_spine node_relation with the resolved relation components
         if dbt_model.__model_attr__.time_spine.is_some() {
-            let database = dbt_model.database();
-            let schema = dbt_model.schema();
-            let alias = dbt_model.alias();
+            let database = dbt_model.database().to_string();
+            let schema = dbt_model.schema().to_string();
+            let alias = dbt_model.alias().to_string();
             let relation_name = dbt_model.__base_attr__.relation_name.clone();
 
             if let Some(ref mut ts) = dbt_model.__model_attr__.time_spine {
@@ -1198,7 +1190,6 @@ async fn build_model_nodes(
                     models.insert(unique_id.to_owned(), Arc::new(dbt_model));
                 }
                 node_names.insert(model_name.to_owned());
-                rendering_results.insert(unique_id, (rendered_sql.clone(), macro_spans.clone()));
 
                 if !arg.skip_creating_generic_tests {
                     properties.as_testable().persist(
@@ -1279,7 +1270,7 @@ struct ResolvedVersionedFields {
     description: String,
     constraints: Vec<ModelConstraint>,
     /// Per-version only; no fallback to top-level (dbt-core parity).
-    deprecation_date: Option<dbt_yaml::Timestamp>,
+    deprecation_date: Option<String>,
     /// Non-empty, non-parseable access string supplied at the version level. `Versions::access`
     /// (`common.rs`) is typed `Option<String>` rather than `Option<Access>` for the same reason:
     /// serde would reject `access: ""` as an unknown variant before we can apply dbt-core's
@@ -1323,10 +1314,11 @@ fn resolve_versioned_fields(
     // itself; for versioned children only the per-version value applies (no
     // inheritance from the top-level).
     let deprecation_date = if maybe_version.is_some() {
-        version_match.and_then(|v| v.deprecation_date)
+        version_match.and_then(|v| v.deprecation_date.clone())
     } else {
-        properties.deprecation_date
-    };
+        properties.deprecation_date.clone()
+    }
+    .map(|raw| dbt_schemas::schemas::common::normalize_deprecation_date(&raw));
 
     // dbt-core validates `unparsed_version.access` (raising `InvalidAccessTypeError` on a bad
     // value) and then discards it unconditionally (GT2 — see the struct doc above). Fusion parses
@@ -1388,13 +1380,6 @@ fn process_versioned_columns(
     }
 
     Ok(columns)
-}
-
-fn materialization_enforces_constraints(materialized: &DbtMaterialization) -> bool {
-    matches!(
-        materialized,
-        DbtMaterialization::Table | DbtMaterialization::Incremental
-    )
 }
 
 fn has_warn_unsupported_constraints(
@@ -1583,6 +1568,37 @@ pub fn validate_interactive_table_config(
     validate_interactive_table_transient(model_config, path)?;
     validate_interactive_table_target_lag_warehouse(model_config, path)?;
     Ok(())
+}
+
+/// `refresh_mode='CUSTOM_INCREMENTAL'` builds a custom incremental dynamic table, which only the
+/// `dynamic_table` materialization does; any other materialization ignores it. A warning, not an
+/// error: the config is often inherited from a folder-level `+refresh_mode` by models that are
+/// meant to be something else (an ephemeral helper joined into the CI DTs), where it is harmless.
+/// Only for models that will actually be built, on Snowflake, as for `interactive_table`.
+pub fn custom_incremental_outside_dynamic_table(
+    model_config: &ResolvedModelConfig,
+    status: ModelStatus,
+    adapter_type: AdapterType,
+    path: &Path,
+) -> Option<Box<dbt_common::FsError>> {
+    if status != ModelStatus::Enabled || !matches!(adapter_type, AdapterType::Snowflake) {
+        return None;
+    }
+    let custom_incremental = model_config
+        .__warehouse_specific_config__
+        .refresh_mode
+        .as_deref()
+        .is_some_and(|mode| mode.trim().eq_ignore_ascii_case("CUSTOM_INCREMENTAL"));
+    if custom_incremental && !matches!(model_config.materialized, DbtMaterialization::DynamicTable)
+    {
+        return Some(fs_err!(
+            code => ErrorCode::CustomIncrementalOutsideDynamicTable,
+            loc => path.to_path_buf(),
+            "refresh_mode='CUSTOM_INCREMENTAL' is ignored: this model is materialized as '{}', and only dynamic_table models build custom incremental dynamic tables. Set materialized='dynamic_table', or, if refresh_mode is inherited from a folder-level config, scope it to the dynamic tables.",
+            model_config.materialized,
+        ));
+    }
+    None
 }
 
 /// Process Python model files through AST analysis
@@ -2593,7 +2609,8 @@ mod interactive_table_validation_tests {
             __warehouse_specific_config__: WarehouseSpecificNodeConfig {
                 cluster_by: Some(ClusterConfig::String("id".to_string())),
                 ..Default::default()
-            },
+            }
+            .into(),
             ..Default::default()
         }
     }
@@ -2816,7 +2833,8 @@ mod interactive_table_validation_tests {
                 transient: Some(true),
                 target_lag: Some("1 minute".to_string()),
                 ..Default::default()
-            },
+            }
+            .into(),
             ..Default::default()
         };
         let resolved = resolve(cfg);
@@ -2838,7 +2856,8 @@ mod interactive_table_validation_tests {
                 transient: Some(true),
                 target_lag: Some("1 minute".to_string()),
                 ..Default::default()
-            },
+            }
+            .into(),
             ..Default::default()
         }
     }
@@ -2968,6 +2987,66 @@ mod interactive_table_validation_tests {
         assert_rejects_with(
             validate_interactive_table_transient(&resolved, &test_path()),
             "Set `transient: false` on this model",
+        );
+    }
+}
+
+/// `refresh_mode='CUSTOM_INCREMENTAL'` warns on any materialization but `dynamic_table`, for models
+/// that will be built on Snowflake.
+#[cfg(test)]
+mod custom_incremental_outside_dynamic_table_tests {
+    use super::{
+        AdapterType, DbtMaterialization, ErrorCode, ModelConfig, ModelStatus, Spanned,
+        StaticAnalysisKind, custom_incremental_outside_dynamic_table,
+    };
+    use dbt_schemas::schemas::common::DbtQuoting;
+    use dbt_schemas::schemas::project::{ResolvableConfig, WarehouseSpecificNodeConfig};
+    use std::path::PathBuf;
+
+    /// The warning for an enabled Snowflake model, if any.
+    fn warning(materialized: DbtMaterialization, refresh_mode: Option<&str>) -> Option<String> {
+        let resolved = ModelConfig {
+            quoting: Some(DbtQuoting::default()),
+            static_analysis: Some(Spanned::new(StaticAnalysisKind::Off)),
+            materialized: Some(materialized),
+            __warehouse_specific_config__: WarehouseSpecificNodeConfig {
+                refresh_mode: refresh_mode.map(str::to_string),
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        }
+        .finalize();
+        custom_incremental_outside_dynamic_table(
+            &resolved,
+            ModelStatus::Enabled,
+            AdapterType::Snowflake,
+            &PathBuf::from("models/my_model.sql"),
+        )
+        .map(|warning| {
+            assert_eq!(
+                warning.code,
+                ErrorCode::CustomIncrementalOutsideDynamicTable
+            );
+            warning.to_string()
+        })
+    }
+
+    #[test]
+    fn warns_outside_dynamic_table() {
+        let message = warning(DbtMaterialization::Table, Some("custom_incremental"))
+            .expect("expected a warning");
+        assert!(
+            message.contains("is ignored") && message.contains("materialized as 'table'"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn silent_on_dynamic_table() {
+        assert_eq!(
+            warning(DbtMaterialization::DynamicTable, Some("CUSTOM_INCREMENTAL")),
+            None
         );
     }
 }
