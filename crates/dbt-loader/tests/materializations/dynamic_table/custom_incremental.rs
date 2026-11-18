@@ -63,9 +63,7 @@ fn ci_append_local_config() -> LocalConfig {
 
 /// The stored append body for [`ci_append_local_config`].
 fn ci_append_body(sql: &str) -> String {
-    format!(
-        "insert into SELF ({CI_COLUMN_LIST}) select {CI_COLUMN_LIST} from ( {sql} ) as DBT_INTERNAL_SOURCE"
-    )
+    format!("insert into SELF ({CI_COLUMN_LIST}) {sql}")
 }
 
 fn ci_ddl(verb: &str, body: &str) -> String {
@@ -605,8 +603,8 @@ fn ci_append_body_matches_across_create_replace_and_create_or_alter() {
 }
 
 #[test]
-fn ci_append_model_starting_with_a_cte_is_wrapped_in_a_subquery() {
-    // A CI DT body can't start with WITH; inside the subquery it is accepted.
+fn ci_append_model_starting_with_a_cte_follows_the_column_list() {
+    // An insert can carry a WITH, so the model SQL goes in unwrapped.
     let fixture = fixture(None, RemoteState::default());
     let sql = "with deleted as (select * from RAW.PUBLIC.USERS changes(information => DEFAULT) where METADATA$ACTION = 'DELETE') select * from deleted";
     render_sql(&fixture, &ci_append_local_config(), sql, false, "apply")

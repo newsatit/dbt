@@ -54,8 +54,6 @@ model.test.deleted_users:
     
     refresh using (
     insert into SELF ("USER_ID", "USER_NAME")
-    select "USER_ID", "USER_NAME"
-    from (
     
     
     -- Audit log: users deleted from the source, kept across --full-refresh.
@@ -63,7 +61,6 @@ model.test.deleted_users:
     from development.adapters_snowflake_custom_incremental_dynamic_table_append.users changes(information => DEFAULT)
     where metadata$action = 'DELETE'
     and not metadata$isupdate
-    ) as DBT_INTERNAL_SOURCE
     )
 - sequence: 5
   type: execute
@@ -121,8 +118,6 @@ model.test.events_enriched:
     
     refresh using (
     insert into SELF ("EVENT_ID", "CAMPAIGN_ID", "LABEL")
-    select "EVENT_ID", "CAMPAIGN_ID", "LABEL"
-    from (
     
     
     -- Stream-static join: each new event with its campaign's label at the time it arrives.
@@ -130,7 +125,6 @@ model.test.events_enriched:
     from development.adapters_snowflake_custom_incremental_dynamic_table_append.events changes(information => APPEND_ONLY) as e
     left join development.adapters_snowflake_custom_incremental_dynamic_table_append.campaigns as c
     on c.campaign_id = e.campaign_id
-    ) as DBT_INTERNAL_SOURCE
     )
 - sequence: 5
   type: execute
@@ -250,14 +244,11 @@ model.test.stock_snapshots:
     
     refresh using (
     insert into SELF ("SKU_ID", "QTY", "SNAPSHOT_AT")
-    select "SKU_ID", "QTY", "SNAPSHOT_AT"
-    from (
     
     
     -- No change source: each refresh after a source change appends the whole table again.
     select sku_id, qty, current_timestamp() as snapshot_at
     from development.adapters_snowflake_custom_incremental_dynamic_table_append.stock
-    ) as DBT_INTERNAL_SOURCE
     )
 - sequence: 6
   type: execute

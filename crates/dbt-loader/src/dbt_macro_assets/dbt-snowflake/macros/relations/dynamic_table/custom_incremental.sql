@@ -177,14 +177,11 @@ when not matched{% if delete_condition %} and not coalesce({{ delete_condition }
 -- funcsign: (string, list[base_column]) -> string
 {% macro snowflake__custom_incremental_append_sql(sql, columns) -%}
 {#-
-    The model SQL is wrapped in a subquery, as for merge: a CI DT body cannot start with WITH.
-    The insert names and selects the discovered columns, so the body does not depend on the
-    model's column order.
+    The insert takes its columns from the discovered list, which comes from the same SQL, so the
+    model's SELECT maps onto them in order. The SQL follows the column list directly: unlike a
+    body starting with WITH, an insert can carry a WITH inside it.
 -#}
     {%- set column_list = columns | map(attribute='quoted') | join(', ') -%}
 insert into SELF ({{ column_list }})
-select {{ column_list }}
-from (
 {{ sql }}
-) as DBT_INTERNAL_SOURCE
 {%- endmacro %}
