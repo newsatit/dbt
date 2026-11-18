@@ -555,6 +555,64 @@ fn ci_rejects_immutable_where() {
     );
 }
 
+#[test]
+fn ci_rejects_row_timestamp() {
+    // Not supported yet: the error points at the current_timestamp() workaround.
+    let fixture = fixture(None, RemoteState::default());
+    let local = LocalConfig {
+        row_timestamp: Some(true),
+        ..ci_append_local_config()
+    };
+    assert_render_error(
+        render_ci(&fixture, &local, false),
+        &fixture,
+        "sets `row_timestamp`, which is not supported",
+    );
+}
+
+#[test]
+fn ci_append_empty_run_stores_the_same_body() {
+    // `--empty` changes only the discovery and the change source's form; the stored body is the same.
+    let fixture = fixture(None, RemoteState::default());
+    render_run(
+        &fixture,
+        &ci_append_local_config(),
+        CI_SQL,
+        false,
+        "apply",
+        true,
+    )
+    .expect("CI DT should render");
+
+    assert_eq!(
+        fixture.executed()[1],
+        ci_ddl("create", &ci_append_body(CI_SQL))
+    );
+}
+
+#[test]
+fn ci_append_quotes_mixed_case_and_reserved_column_names() {
+    let fixture = fixture_with(
+        None,
+        RemoteState::default(),
+        FixtureOptions {
+            columns: Some(&[("Order Id", "NUMBER(38,0)"), ("select", "VARCHAR")]),
+            ..Default::default()
+        },
+    );
+    let sql = "select 1 as \"Order Id\", 'x' as \"select\" from RAW.PUBLIC.ORDERS";
+    render_sql(&fixture, &ci_append_local_config(), sql, false, "apply")
+        .expect("CI DT should render");
+
+    assert!(
+        fixture.executed()[1].contains(&format!(
+            "insert into SELF (\"Order Id\", \"select\") {sql}"
+        )),
+        "the insert must quote each discovered column, got: {}",
+        fixture.executed()[1]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // incremental_strategy='append'
 // ---------------------------------------------------------------------------
