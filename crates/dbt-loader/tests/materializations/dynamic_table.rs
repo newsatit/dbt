@@ -567,6 +567,25 @@ fn no_existing_relation_creates_the_dynamic_table() {
 }
 
 #[test]
+fn row_timestamp_is_not_rendered_on_a_regular_dynamic_table() {
+    // Snowflake accepts row_timestamp on a dynamic table, but Fusion doesn't send it: the create DDL
+    // is the same with or without it, which the CI DT suite relies on too.
+    let fixture = fixture(None, RemoteState::default());
+    let local = LocalConfig {
+        row_timestamp: Some(true),
+        ..base_local_config()
+    };
+    render_ok(&fixture, &local, false, "apply");
+
+    assert_eq!(
+        fixture.executed(),
+        vec![format!(
+            "create dynamic table {RENDERED_RELATION} target_lag = '1 minute' warehouse = WH refresh_mode = AUTO initialize = ON_CREATE scheduler = 'ENABLE' as ( {MODEL_SQL} )"
+        )]
+    );
+}
+
+#[test]
 fn full_refresh_replaces_rather_than_alters() {
     let fixture = fixture(Some(RelationType::DynamicTable), matching_remote_state());
     render_ok(&fixture, &base_local_config(), true, "apply");

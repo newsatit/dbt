@@ -54,12 +54,6 @@
         ) %}
     {%- endif -%}
 
-    {%- if config.get('row_timestamp') -%}
-        {% do exceptions.raise_compiler_error(
-            "Dynamic table `" ~ this ~ "` sets `row_timestamp`, which is not supported on a custom incremental dynamic table yet. Use a `current_timestamp()` column in the model's SELECT instead."
-        ) %}
-    {%- endif -%}
-
     {%- if strategy == 'merge' -%}
         {% do snowflake__validate_custom_incremental_merge_config() %}
     {%- elif strategy == 'append' -%}

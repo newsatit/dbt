@@ -556,17 +556,18 @@ fn ci_rejects_immutable_where() {
 }
 
 #[test]
-fn ci_rejects_row_timestamp() {
-    // Not supported yet: the error points at the current_timestamp() workaround.
+fn ci_ignores_row_timestamp_as_a_regular_dynamic_table_does() {
+    // Fusion doesn't render row_timestamp for any dynamic table yet, so the CI DT body is the same.
     let fixture = fixture(None, RemoteState::default());
     let local = LocalConfig {
         row_timestamp: Some(true),
         ..ci_append_local_config()
     };
-    assert_render_error(
-        render_ci(&fixture, &local, false),
-        &fixture,
-        "sets `row_timestamp`, which is not supported",
+    render_ci(&fixture, &local, false).expect("CI DT should render");
+
+    assert_eq!(
+        fixture.executed()[1],
+        ci_ddl("create", &ci_append_body(CI_SQL))
     );
 }
 
