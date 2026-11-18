@@ -827,3 +827,79 @@ fn ci_create_or_alter_redeclares_an_append_body_in_place() {
         ]
     );
 }
+
+/// The `create or alter` DDL for an append CI DT whose discovered columns are `column_names`, with
+/// `column_defs` as its declared `name type` list.
+fn ci_append_create_or_alter_ddl(column_defs: &str, column_names: &str) -> String {
+    format!(
+        "create or alter dynamic table {RENDERED_RELATION} ({column_defs}) target_lag = '1 minute' warehouse = WH refresh_mode = CUSTOM_INCREMENTAL scheduler = 'ENABLE' refresh using ( insert into SELF ({column_names}) {CI_SQL} )"
+    )
+}
+
+#[test]
+fn ci_create_or_alter_adds_a_column_to_an_append_ci_dt() {
+    // The discovered columns come from the model, not the live table: an added column is declared
+    // with the body, and the rows already appended keep NULL in it.
+    let fixture = fixture_with(
+        Some(RelationType::DynamicTable),
+        ci_matching_remote_state(),
+        FixtureOptions {
+            create_or_alter: true,
+            columns: Some(&[
+                ("ID", "NUMBER(38,0)"),
+                ("AMOUNT", "NUMBER(38,2)"),
+                ("IS_DELETED", "BOOLEAN"),
+                ("CAMPAIGN_ID", "NUMBER(38,0)"),
+            ]),
+            ..Default::default()
+        },
+    );
+    render_ci(&fixture, &ci_append_local_config(), false).expect("CI DT should render");
+
+    assert_eq!(
+        fixture.executed()[1],
+        ci_append_create_or_alter_ddl(
+            r#""ID" NUMBER(38,0), "AMOUNT" NUMBER(38,2), "IS_DELETED" BOOLEAN, "CAMPAIGN_ID" NUMBER(38,0)"#,
+            r#""ID", "AMOUNT", "IS_DELETED", "CAMPAIGN_ID""#,
+        )
+    );
+}
+
+#[test]
+fn ci_create_or_alter_drops_a_column_from_an_append_ci_dt() {
+    // A column the model no longer returns is dropped in place, as for merge.
+    let fixture = fixture_with(
+        Some(RelationType::DynamicTable),
+        ci_matching_remote_state(),
+        FixtureOptions {
+            create_or_alter: true,
+            columns: Some(&[("ID", "NUMBER(38,0)"), ("AMOUNT", "NUMBER(38,2)")]),
+            ..Default::default()
+        },
+    );
+    render_ci(&fixture, &ci_append_local_config(), false).expect("CI DT should render");
+
+    assert_eq!(
+        fixture.executed()[1],
+        ci_append_create_or_alter_ddl(
+            r#""ID" NUMBER(38,0), "AMOUNT" NUMBER(38,2)"#,
+            r#""ID", "AMOUNT""#,
+        )
+    );
+}
+
+#[test]
+fn ci_create_or_alter_switches_append_to_merge_in_place() {
+    // The remote state carries no strategy, so this is the same path as any body edit: the merge
+    // body is declared with CREATE OR ALTER, with the unique_key the merge needs.
+    let fixture = ci_create_or_alter_fixture(ci_matching_remote_state());
+    render_ci(&fixture, &ci_local_config(), false).expect("CI DT should render");
+
+    assert_eq!(
+        fixture.executed(),
+        vec![
+            ci_discovery_sql(),
+            ci_create_or_alter_ddl("1 minute", &ci_merge_body(CI_SQL))
+        ]
+    );
+}
