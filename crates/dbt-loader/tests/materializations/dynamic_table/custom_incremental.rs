@@ -572,22 +572,30 @@ fn ci_ignores_row_timestamp_as_a_regular_dynamic_table_does() {
 }
 
 #[test]
-fn ci_append_empty_run_stores_the_same_body() {
-    // `--empty` changes only the discovery and the change source's form; the stored body is the same.
+fn ci_append_empty_run_stores_the_zero_row_body() {
+    // Under `--empty`, `changes()` renders its `limit 0` form, and that form is what the CI DT stores:
+    // it reads no rows until `--full-refresh` rebuilds it with the normal body.
     let fixture = fixture(None, RemoteState::default());
+    let empty_sql = "select o.id, o.amount, o.METADATA$ACTION = 'DELETE' as is_deleted from (select * from RAW.PUBLIC.ORDERS changes(information => APPEND_ONLY) limit 0) as o";
     render_run(
         &fixture,
         &ci_append_local_config(),
-        CI_SQL,
+        empty_sql,
         false,
         "apply",
         true,
     )
     .expect("CI DT should render");
 
+    assert!(
+        fixture.executed()[0]
+            .contains("changes(information => APPEND_ONLY) at(offset => 0) limit 0"),
+        "discovery starts the change source now, keeping the limit 0 form, got: {}",
+        fixture.executed()[0]
+    );
     assert_eq!(
         fixture.executed()[1],
-        ci_ddl("create", &ci_append_body(CI_SQL))
+        ci_ddl("create", &ci_append_body(empty_sql))
     );
 }
 
