@@ -114,6 +114,7 @@ struct LocalConfig {
     delete_condition: Option<&'static str>,
     merge_update_columns: Option<Value>,
     merge_exclude_columns: Option<Value>,
+    row_timestamp: Option<bool>,
 }
 
 /// A serialized model node, built the way the run context builds `config.model`.
@@ -202,6 +203,7 @@ fn dynamic_config(
     let delete_condition = local.delete_condition;
     let merge_update_columns = local.merge_update_columns.clone();
     let merge_exclude_columns = local.merge_exclude_columns.clone();
+    let row_timestamp = local.row_timestamp;
     mock.on("get", move |args| {
         let key = args.first().and_then(|v| v.as_str());
         // `default` may arrive positionally or as a keyword (`default=...`), which minijinja
@@ -226,6 +228,7 @@ fn dynamic_config(
             Some("delete_condition") => Ok(delete_condition.map_or(default, Value::from)),
             Some("merge_update_columns") => Ok(merge_update_columns.clone().unwrap_or(default)),
             Some("merge_exclude_columns") => Ok(merge_exclude_columns.clone().unwrap_or(default)),
+            Some("row_timestamp") => Ok(row_timestamp.map_or(default, Value::from)),
             _ => Ok(default),
         }
     });
@@ -560,6 +563,25 @@ fn no_existing_relation_creates_the_dynamic_table() {
         fixture.describe_calls(),
         0,
         "there is no current state to read on a first build"
+    );
+}
+
+#[test]
+fn row_timestamp_is_not_rendered_on_a_regular_dynamic_table() {
+    // Snowflake accepts row_timestamp on a dynamic table, but Fusion doesn't send it: the create DDL
+    // is the same with or without it, which the CI DT suite relies on too.
+    let fixture = fixture(None, RemoteState::default());
+    let local = LocalConfig {
+        row_timestamp: Some(true),
+        ..base_local_config()
+    };
+    render_ok(&fixture, &local, false, "apply");
+
+    assert_eq!(
+        fixture.executed(),
+        vec![format!(
+            "create dynamic table {RENDERED_RELATION} target_lag = '1 minute' warehouse = WH refresh_mode = AUTO initialize = ON_CREATE scheduler = 'ENABLE' as ( {MODEL_SQL} )"
+        )]
     );
 }
 

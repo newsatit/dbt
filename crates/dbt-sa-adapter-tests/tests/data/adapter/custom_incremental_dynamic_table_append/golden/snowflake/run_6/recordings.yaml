@@ -1,0 +1,28 @@
+23effc7d:
+- sequence: 0
+  type: execute
+  sql: select count(*) from ((select sku_id, qty, count(*) from development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots group by sku_id, qty minus select column1, column2, column3 from values (1, 5, 1), (2, 7, 2), (1, 6, 1)) union all (select column1, column2, column3 from values (1, 5, 1), (2, 7, 2), (1, 6, 1) minus select sku_id, qty, count(*) from development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots group by sku_id, qty))
+2a52c4a5:
+- sequence: 0
+  type: execute
+  sql: select count(*) from ((select user_id, user_name from development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users minus select column1, column2 from values (1, 'u1')) union all (select column1, column2 from values (1, 'u1') minus select user_id, user_name from development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users))
+5b5c45b4:
+- sequence: 0
+  type: execute
+  sql: select count(*) from ((select event_id, campaign_id, label from development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched minus select column1, column2, column3 from values (1, 20, 'b'), (3, 10, 'a2')) union all (select column1, column2, column3 from values (1, 20, 'b'), (3, 10, 'a2') minus select event_id, campaign_id, label from development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched))
+8108667c:
+- sequence: 0
+  type: execute
+  sql: show dynamic tables like 'EVENTS_SWITCH' in schema development.adapters_snowflake_custom_incremental_dynamic_table_append
+86a15b4e:
+- sequence: 0
+  type: execute
+  sql: select count(*) from ((select event_id, campaign_id from development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch minus select column1, column2 from values (1, 20), (3, 10)) union all (select column1, column2 from values (1, 20), (3, 10) minus select event_id, campaign_id from development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch))
+d43bccf8:
+- sequence: 0
+  type: execute
+  sql: select count(distinct snapshot_at) from development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots
+e8f0e54e:
+- sequence: 0
+  type: execute
+  sql: select "refresh_mode" from table(result_scan(last_query_id()))

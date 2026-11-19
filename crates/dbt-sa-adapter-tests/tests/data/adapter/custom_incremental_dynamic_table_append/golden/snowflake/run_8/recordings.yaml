@@ -1,0 +1,239 @@
+dbbbff64:
+- sequence: 0
+  type: execute
+  sql: |-
+    show terse schemas in database development
+    limit 10000
+model.test.deleted_users:
+- sequence: 0
+  type: execute
+  sql: use warehouse [MASKED_WH]
+- sequence: 1
+  type: execute
+  sql: show dynamic tables like 'DELETED_USERS' in schema "DEVELOPMENT"."ADAPTERS_SNOWFLAKE_CUSTOM_INCREMENTAL_DYNAMIC_TABLE_APPEND"
+- sequence: 2
+  type: execute
+  sql: |-
+    create or replace temporary table development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users__dbt_tmp
+    as (
+    select * from (
+    
+    
+    -- Audit log: users deleted from the source, kept across --full-refresh.
+    select user_id, user_name
+    from development.adapters_snowflake_custom_incremental_dynamic_table_append.users changes(information => DEFAULT) at(offset => 0)
+    where metadata$action = 'DELETE'
+    and not metadata$isupdate
+    ) limit 0
+    )
+- sequence: 3
+  type: execute
+  sql: describe table development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users__dbt_tmp
+- sequence: 4
+  type: execute
+  sql: drop table if exists development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users__dbt_tmp cascade
+- sequence: 5
+  type: execute
+  sql: |-
+    create or alter dynamic table development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users ("USER_ID" NUMBER(38,0), "USER_NAME" character varying(16))
+    
+    warehouse = [MASKED_WH]
+    
+    
+    refresh_mode = CUSTOM_INCREMENTAL
+    
+    scheduler = 'DISABLE'
+    
+    
+    
+    
+    
+    refresh using (
+    insert into SELF ("USER_ID", "USER_NAME")
+    
+    
+    -- Audit log: users deleted from the source, kept across --full-refresh.
+    select user_id, user_name
+    from development.adapters_snowflake_custom_incremental_dynamic_table_append.users changes(information => DEFAULT)
+    where metadata$action = 'DELETE'
+    and not metadata$isupdate
+    )
+- sequence: 6
+  type: execute
+  sql: alter dynamic table development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users refresh
+- sequence: 7
+  type: execute
+  sql: use warehouse [MASKED_WH]
+model.test.events_enriched:
+- sequence: 0
+  type: execute
+  sql: use warehouse [MASKED_WH]
+- sequence: 1
+  type: execute
+  sql: show dynamic tables like 'EVENTS_ENRICHED' in schema "DEVELOPMENT"."ADAPTERS_SNOWFLAKE_CUSTOM_INCREMENTAL_DYNAMIC_TABLE_APPEND"
+- sequence: 2
+  type: execute
+  sql: |-
+    create or replace temporary table development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched__dbt_tmp
+    as (
+    select * from (
+    
+    
+    -- Stream-static join: each new event with its campaign's label at the time it arrives.
+    select e.event_id, e.campaign_id, c.label
+    from development.adapters_snowflake_custom_incremental_dynamic_table_append.events changes(information => APPEND_ONLY) at(offset => 0) as e
+    left join development.adapters_snowflake_custom_incremental_dynamic_table_append.campaigns as c
+    on c.campaign_id = e.campaign_id
+    ) limit 0
+    )
+- sequence: 3
+  type: execute
+  sql: describe table development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched__dbt_tmp
+- sequence: 4
+  type: execute
+  sql: drop table if exists development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched__dbt_tmp cascade
+- sequence: 5
+  type: execute
+  sql: |-
+    create or alter dynamic table development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched ("EVENT_ID" NUMBER(38,0), "CAMPAIGN_ID" NUMBER(38,0), "LABEL" character varying(16))
+    
+    warehouse = [MASKED_WH]
+    
+    
+    refresh_mode = CUSTOM_INCREMENTAL
+    
+    scheduler = 'DISABLE'
+    
+    
+    
+    
+    
+    refresh using (
+    insert into SELF ("EVENT_ID", "CAMPAIGN_ID", "LABEL")
+    
+    
+    -- Stream-static join: each new event with its campaign's label at the time it arrives.
+    select e.event_id, e.campaign_id, c.label
+    from development.adapters_snowflake_custom_incremental_dynamic_table_append.events changes(information => APPEND_ONLY) as e
+    left join development.adapters_snowflake_custom_incremental_dynamic_table_append.campaigns as c
+    on c.campaign_id = e.campaign_id
+    )
+- sequence: 6
+  type: execute
+  sql: alter dynamic table development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched refresh
+- sequence: 7
+  type: execute
+  sql: use warehouse [MASKED_WH]
+model.test.events_switch:
+- sequence: 0
+  type: execute
+  sql: use warehouse [MASKED_WH]
+- sequence: 1
+  type: execute
+  sql: show dynamic tables like 'EVENTS_SWITCH' in schema "DEVELOPMENT"."ADAPTERS_SNOWFLAKE_CUSTOM_INCREMENTAL_DYNAMIC_TABLE_APPEND"
+- sequence: 2
+  type: execute
+  sql: |-
+    create or replace temporary table development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch__dbt_tmp
+    as (
+    select * from (
+    
+    -- An append now; unique_key stays set and is ignored.
+    select e.event_id, e.campaign_id
+    from development.adapters_snowflake_custom_incremental_dynamic_table_append.events changes(information => APPEND_ONLY) at(offset => 0) as e
+    ) limit 0
+    )
+- sequence: 3
+  type: execute
+  sql: describe table development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch__dbt_tmp
+- sequence: 4
+  type: execute
+  sql: drop table if exists development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch__dbt_tmp cascade
+- sequence: 5
+  type: execute
+  sql: |-
+    create or alter dynamic table development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch ("EVENT_ID" NUMBER(38,0), "CAMPAIGN_ID" NUMBER(38,0))
+    
+    warehouse = [MASKED_WH]
+    
+    
+    refresh_mode = CUSTOM_INCREMENTAL
+    
+    scheduler = 'DISABLE'
+    
+    
+    
+    
+    
+    refresh using (
+    insert into SELF ("EVENT_ID", "CAMPAIGN_ID")
+    
+    -- An append now; unique_key stays set and is ignored.
+    select e.event_id, e.campaign_id
+    from development.adapters_snowflake_custom_incremental_dynamic_table_append.events changes(information => APPEND_ONLY) as e
+    )
+- sequence: 6
+  type: execute
+  sql: alter dynamic table development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch refresh
+- sequence: 7
+  type: execute
+  sql: use warehouse [MASKED_WH]
+model.test.stock_snapshots:
+- sequence: 0
+  type: execute
+  sql: use warehouse [MASKED_WH]
+- sequence: 1
+  type: execute
+  sql: SHOW OBJECTS IN SCHEMA "DEVELOPMENT"."ADAPTERS_SNOWFLAKE_CUSTOM_INCREMENTAL_DYNAMIC_TABLE_APPEND" LIMIT 10000
+- sequence: 2
+  type: execute
+  sql: show dynamic tables like 'STOCK_SNAPSHOTS' in schema "DEVELOPMENT"."ADAPTERS_SNOWFLAKE_CUSTOM_INCREMENTAL_DYNAMIC_TABLE_APPEND"
+- sequence: 3
+  type: execute
+  sql: |-
+    create or replace temporary table development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots__dbt_tmp
+    as (
+    select * from (
+    
+    
+    -- No change source: each refresh after a source change appends the whole table again.
+    select sku_id, qty, current_timestamp() as snapshot_at
+    from development.adapters_snowflake_custom_incremental_dynamic_table_append.stock
+    ) limit 0
+    )
+- sequence: 4
+  type: execute
+  sql: describe table development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots__dbt_tmp
+- sequence: 5
+  type: execute
+  sql: drop table if exists development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots__dbt_tmp cascade
+- sequence: 6
+  type: execute
+  sql: |-
+    create or alter dynamic table development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots ("SKU_ID" NUMBER(38,0), "QTY" NUMBER(38,0), "SNAPSHOT_AT" TIMESTAMP_LTZ)
+    
+    warehouse = [MASKED_WH]
+    
+    
+    refresh_mode = CUSTOM_INCREMENTAL
+    
+    scheduler = 'DISABLE'
+    
+    
+    
+    
+    
+    refresh using (
+    insert into SELF ("SKU_ID", "QTY", "SNAPSHOT_AT")
+    
+    
+    -- No change source: each refresh after a source change appends the whole table again.
+    select sku_id, qty, current_timestamp() as snapshot_at
+    from development.adapters_snowflake_custom_incremental_dynamic_table_append.stock
+    )
+- sequence: 7
+  type: execute
+  sql: alter dynamic table development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots refresh
+- sequence: 8
+  type: execute
+  sql: use warehouse [MASKED_WH]

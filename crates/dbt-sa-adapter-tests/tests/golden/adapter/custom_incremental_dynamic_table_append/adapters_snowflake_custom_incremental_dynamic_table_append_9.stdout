@@ -1,0 +1,15 @@
+   dbt-oss 
+   Loading profiles.yml
+   Parsing models/sources.yml
+   Parsing models/deleted_users.sql
+   Parsing models/events_enriched.sql
+   Parsing models/events_switch.sql
+   Parsing models/stock_snapshots.sql
+[PASS] after_switch: events_enriched holds each event with the label at the refresh that appended it
+[PASS] after_switch: deleted_users holds the deleted users
+[PASS] after_switch: stock_snapshots holds a copy per change
+[PASS] after_switch: stock_snapshots copies have distinct snapshot_at
+[PASS] after_switch: events_switch holds the expected rows
+[PASS] after_switch: events_switch is a CI DT
+==================== Execution Summary =====================
+Finished 'run-operation' successfully for target 'snowflake' [duration]

@@ -1,0 +1,56 @@
+12412fc1:
+- sequence: 0
+  type: execute
+  sql: CREATE OR ALTER SCHEMA development.adapters_snowflake_custom_incremental_dynamic_table_append
+35a844de:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_append.events VALUES (1, 10), (2, 20)
+42f24921:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_append.campaigns VALUES (10, 'a'), (20, 'b')
+44a26534:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_append.stock VALUES (1, 5), (2, 7)
+47db1e61:
+- sequence: 0
+  type: execute
+  sql: DROP DYNAMIC TABLE IF EXISTS development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch
+4c2b7c78:
+- sequence: 0
+  type: execute
+  sql: DROP DYNAMIC TABLE IF EXISTS development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched
+619d647f:
+- sequence: 0
+  type: execute
+  sql: CREATE OR REPLACE TABLE development.adapters_snowflake_custom_incremental_dynamic_table_append.campaigns (campaign_id int, label varchar(16)) CHANGE_TRACKING = TRUE
+6b4ae521:
+- sequence: 0
+  type: execute
+  sql: CREATE OR REPLACE TABLE development.adapters_snowflake_custom_incremental_dynamic_table_append.users (user_id int, user_name varchar(16)) CHANGE_TRACKING = TRUE
+7f836a24:
+- sequence: 0
+  type: execute
+  sql: CREATE OR REPLACE TABLE development.adapters_snowflake_custom_incremental_dynamic_table_append.stock (sku_id int, qty int) CHANGE_TRACKING = TRUE
+84bdc9d1:
+- sequence: 0
+  type: execute
+  sql: USE DATABASE development
+adbc5f4c:
+- sequence: 0
+  type: execute
+  sql: DROP DYNAMIC TABLE IF EXISTS development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users
+bf5e2bf2:
+- sequence: 0
+  type: execute
+  sql: INSERT INTO development.adapters_snowflake_custom_incremental_dynamic_table_append.users VALUES (1, 'u1'), (2, 'u2'), (3, 'u3')
+c2484201:
+- sequence: 0
+  type: execute
+  sql: DROP DYNAMIC TABLE IF EXISTS development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots
+c66d1150:
+- sequence: 0
+  type: execute
+  sql: CREATE OR REPLACE TABLE development.adapters_snowflake_custom_incremental_dynamic_table_append.events (event_id int, campaign_id int) CHANGE_TRACKING = TRUE

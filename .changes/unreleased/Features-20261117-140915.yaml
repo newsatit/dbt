@@ -1,0 +1,7 @@
+kind: Features
+body: 'Snowflake custom incremental dynamic tables: the append strategy'
+time: 2026-11-17T14:09:15.53001-08:00
+custom:
+    author: newsatit
+    issue: ""
+    project: dbt-core

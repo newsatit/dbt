@@ -1,0 +1,23 @@
+   dbt-oss 
+   Loading profiles.yml
+   Parsing models/sources.yml
+   Parsing models/deleted_users.sql
+   Parsing models/events_enriched.sql
+   Parsing models/events_switch.sql
+   Parsing models/stock_snapshots.sql
+ Rendering models/stock_snapshots.sql
+   Running models/stock_snapshots.sql
+    Warned model adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots (dynamic_table) [1 of 4 in duration]
+ Rendering models/events_switch.sql
+   Running models/events_switch.sql
+    Warned model adapters_snowflake_custom_incremental_dynamic_table_append.events_switch (dynamic_table) [2 of 4 in duration]
+ Rendering models/events_enriched.sql
+   Running models/events_enriched.sql
+    Warned model adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched (dynamic_table) [3 of 4 in duration]
+ Rendering models/deleted_users.sql
+   Running models/deleted_users.sql
+    Warned model adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users (dynamic_table) [4 of 4 in duration]
+==================== Execution Summary =====================
+Finished 'run' with 4 warnings for target 'snowflake' [duration]
+Processed: 4 models
+Summary: 4 total | 4 warn

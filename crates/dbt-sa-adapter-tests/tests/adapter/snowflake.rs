@@ -545,6 +545,51 @@ async fn adapters_snowflake_custom_incremental_dynamic_table_edge_cases() -> FsR
     .await
 }
 
+/// Append custom incremental dynamic tables, one model per scenario (see the project's README): the
+/// design doc's stream-static join, audit log of deletes and snapshot, `full_refresh=false`, and a
+/// merge -> append switch through CREATE OR ALTER. `verify` prints [PASS]/[FAIL] lines.
+#[dbt_runtime::test]
+async fn adapters_snowflake_custom_incremental_dynamic_table_append() -> FsResult<()> {
+    run_fs_record_replay_task_seq(
+        env!("CARGO_MANIFEST_DIR"),
+        &FS_RUNNER,
+        current_function_name!(),
+        "tests/data/adapter/custom_incremental_dynamic_table_append",
+        AdapterType::Snowflake.as_ref(),
+        None,
+        &[
+            AdapterRecordReplayTurn::new("run-operation set_up", &[]), // run_0
+            AdapterRecordReplayTurn::new("run", &[]), // run_1: create, columns discovered
+            AdapterRecordReplayTurn::new("run-operation apply_changes", &[]), // run_2: round 1
+            AdapterRecordReplayTurn::new("run", &[]), // run_3: no-op builds, refreshes
+            AdapterRecordReplayTurn::new(
+                "run-operation verify --args {{\"stage\":\"after_refresh\"}}",
+                &[],
+            ), // run_4
+            AdapterRecordReplayTurn::new("run --full-refresh", &[]), // run_5: full_refresh=false models kept
+            AdapterRecordReplayTurn::new(
+                "run-operation verify --args {{\"stage\":\"after_full_refresh\"}}",
+                &[],
+            ), // run_6
+            AdapterRecordReplayTurn::new("run-operation apply_more_changes", &[]), // run_7: round 2
+            AdapterRecordReplayTurn::new(
+                "run",
+                &[FileOverride {
+                    original: "dbt_project.yml",
+                    overriding_file: "_project_overrides/switched.yml",
+                }],
+            ), // run_8: CREATE OR ALTER; events_switch merge -> append
+            AdapterRecordReplayTurn::new(
+                "run-operation verify --args {{\"stage\":\"after_switch\"}}",
+                &[],
+            ), // run_9
+        ],
+        None,
+        &[],
+    )
+    .await
+}
+
 #[dbt_runtime::test]
 async fn adapters_snowflake_seed_datatypes() -> FsResult<()> {
     run_fs_record_replay_task_seq(

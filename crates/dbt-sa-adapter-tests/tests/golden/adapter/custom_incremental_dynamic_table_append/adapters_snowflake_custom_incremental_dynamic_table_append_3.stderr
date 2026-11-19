@@ -1,0 +1,8 @@
+[warning] [JinjaWarn (dbt1071)]: No configuration changes were identified on: `development.adapters_snowflake_custom_incremental_dynamic_table_append.stock_snapshots`. Continuing.
+  --> dbt_internal_packages/dbt-snowflake/macros/materializations/dynamic_table.sql:38:1
+[warning] [JinjaWarn (dbt1071)]: No configuration changes were identified on: `development.adapters_snowflake_custom_incremental_dynamic_table_append.events_switch`. Continuing.
+  --> dbt_internal_packages/dbt-snowflake/macros/materializations/dynamic_table.sql:38:1
+[warning] [JinjaWarn (dbt1071)]: No configuration changes were identified on: `development.adapters_snowflake_custom_incremental_dynamic_table_append.events_enriched`. Continuing.
+  --> dbt_internal_packages/dbt-snowflake/macros/materializations/dynamic_table.sql:38:1
+[warning] [JinjaWarn (dbt1071)]: No configuration changes were identified on: `development.adapters_snowflake_custom_incremental_dynamic_table_append.deleted_users`. Continuing.
+  --> dbt_internal_packages/dbt-snowflake/macros/materializations/dynamic_table.sql:38:1
