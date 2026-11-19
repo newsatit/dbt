@@ -831,11 +831,17 @@ fn ci_create_or_alter_redeclares_an_append_body_in_place() {
 
 /// The `create or alter` DDL for an append CI DT whose discovered columns are `column_names`, with
 /// `column_defs` as its declared `name type` list.
-fn ci_append_create_or_alter_ddl(column_defs: &str, column_names: &str) -> String {
+fn ci_append_create_or_alter_ddl(column_defs: &str, column_names: &str, sql: &str) -> String {
     format!(
-        "create or alter dynamic table {RENDERED_RELATION} ({column_defs}) target_lag = '1 minute' warehouse = WH refresh_mode = CUSTOM_INCREMENTAL scheduler = 'ENABLE' refresh using ( insert into SELF ({column_names}) {CI_SQL} )"
+        "create or alter dynamic table {RENDERED_RELATION} ({column_defs}) target_lag = '1 minute' warehouse = WH refresh_mode = CUSTOM_INCREMENTAL scheduler = 'ENABLE' refresh using ( insert into SELF ({column_names}) {sql} )"
     )
 }
+
+/// The model after a column is added: its body returns `CAMPAIGN_ID` too.
+const ADD_COLUMN_SQL: &str = "select o.id, o.amount, o.campaign_id from RAW.PUBLIC.ORDERS changes(information => APPEND_ONLY) as o";
+/// The model after a column is dropped: its body no longer returns `IS_DELETED`.
+const DROP_COLUMN_SQL: &str =
+    "select o.id, o.amount from RAW.PUBLIC.ORDERS changes(information => APPEND_ONLY) as o";
 
 #[test]
 fn ci_create_or_alter_adds_a_column_to_an_append_ci_dt() {
@@ -849,19 +855,26 @@ fn ci_create_or_alter_adds_a_column_to_an_append_ci_dt() {
             columns: Some(&[
                 ("ID", "NUMBER(38,0)"),
                 ("AMOUNT", "NUMBER(38,2)"),
-                ("IS_DELETED", "BOOLEAN"),
                 ("CAMPAIGN_ID", "NUMBER(38,0)"),
             ]),
             ..Default::default()
         },
     );
-    render_ci(&fixture, &ci_append_local_config(), false).expect("CI DT should render");
+    render_sql(
+        &fixture,
+        &ci_append_local_config(),
+        ADD_COLUMN_SQL,
+        false,
+        "apply",
+    )
+    .expect("CI DT should render");
 
     assert_eq!(
         fixture.executed()[1],
         ci_append_create_or_alter_ddl(
-            r#""ID" NUMBER(38,0), "AMOUNT" NUMBER(38,2), "IS_DELETED" BOOLEAN, "CAMPAIGN_ID" NUMBER(38,0)"#,
-            r#""ID", "AMOUNT", "IS_DELETED", "CAMPAIGN_ID""#,
+            r#""ID" NUMBER(38,0), "AMOUNT" NUMBER(38,2), "CAMPAIGN_ID" NUMBER(38,0)"#,
+            r#""ID", "AMOUNT", "CAMPAIGN_ID""#,
+            ADD_COLUMN_SQL,
         )
     );
 }
@@ -878,13 +891,21 @@ fn ci_create_or_alter_drops_a_column_from_an_append_ci_dt() {
             ..Default::default()
         },
     );
-    render_ci(&fixture, &ci_append_local_config(), false).expect("CI DT should render");
+    render_sql(
+        &fixture,
+        &ci_append_local_config(),
+        DROP_COLUMN_SQL,
+        false,
+        "apply",
+    )
+    .expect("CI DT should render");
 
     assert_eq!(
         fixture.executed()[1],
         ci_append_create_or_alter_ddl(
             r#""ID" NUMBER(38,0), "AMOUNT" NUMBER(38,2)"#,
             r#""ID", "AMOUNT""#,
+            DROP_COLUMN_SQL,
         )
     );
 }
