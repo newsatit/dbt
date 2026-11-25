@@ -8,14 +8,21 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use dbt_adapter::relation::RelationObject;
+use dbt_adapter::Column;
+use dbt_adapter::relation::{RelationObject, create_relation};
 use dbt_adapter_core::AdapterType;
 use dbt_agate::AgateTable;
 use dbt_jinja_utils::mock_object::MockJinjaObject;
 use dbt_schemas::dbt_types::RelationType;
 use dbt_schemas::schemas::common::DbtMaterialization;
-use dbt_schemas::schemas::project::{ModelConfig, WarehouseSpecificNodeConfig};
-use dbt_schemas::schemas::{AdapterAttr, CommonAttributes, DbtModel, NodeBaseAttributes};
+use dbt_schemas::schemas::dbt_catalogs::TableFormat;
+use dbt_schemas::schemas::project::{
+    LazyWarehouseSpecificNodeConfig, ModelConfig, WarehouseSpecificNodeConfig,
+};
+use dbt_schemas::schemas::relations::SNOWFLAKE_RESOLVED_QUOTING;
+use dbt_schemas::schemas::{
+    AdapterAttr, CommonAttributes, DbtModel, DbtModelAttr, NodeBaseAttributes,
+};
 use dbt_yaml::Spanned;
 use minijinja::Value;
 use minijinja::value::{Kwargs, ValueMap};
@@ -32,6 +39,15 @@ const IDENTIFIER: &str = "MY_DT";
 const RENDERED_RELATION: &str = "TEST_DB.TEST_SCHEMA.MY_DT";
 const MODEL_SQL: &str = "select 1 as id";
 
+/// A CI DT model's compiled SQL, as the run context passes it in `sql`.
+const CI_SQL: &str = "select o.id, o.amount, o.METADATA$ACTION = 'DELETE' as is_deleted from RAW.PUBLIC.ORDERS changes(information => DEFAULT) as o";
+/// What CI DT column discovery reads back from the temporary relation.
+const CI_COLUMNS: &[(&str, &str)] = &[
+    ("ID", "NUMBER(38,0)"),
+    ("AMOUNT", "NUMBER(38,2)"),
+    ("IS_DELETED", "BOOLEAN"),
+];
+
 /// The columns `describe_relation` returns for a dynamic table, spelled as `SHOW DYNAMIC TABLES`
 /// reports them (`adapter_impl.rs`'s `describe_dynamic_table` selects exactly these 11 columns,
 /// in this order). A column this fixture omits reads back as unset rather than erroring, so a
@@ -44,6 +60,7 @@ struct RemoteState {
     refresh_mode: Option<String>,
     initialization_warehouse: Option<String>,
     cluster_by: Option<String>,
+    transient: Option<bool>,
 }
 
 /// The `describe_relation` return value for a dynamic table, under the key the changeset reads it
@@ -64,7 +81,8 @@ fn describe_result(state: RemoteState) -> Value {
             [state.initialization_warehouse]
         ),
         ("immutable_where", Utf8, [Option::<String>::None]),
-        ("cluster_by", Utf8, [state.cluster_by])
+        ("cluster_by", Utf8, [state.cluster_by]),
+        ("transient", Boolean, [state.transient])
     )
     .expect("readback batch should build");
 
@@ -81,6 +99,21 @@ struct LocalConfig {
     snowflake_initialization_warehouse: Option<String>,
     cluster_by: Option<dbt_schemas::schemas::common::ClusterConfig>,
     refresh_mode: Option<String>,
+    transient: Option<bool>,
+    scheduler: Option<String>,
+    immutable_where: Option<String>,
+    initialize: Option<String>,
+    copy_grants: Option<bool>,
+    table_tag: Option<String>,
+    row_access_policy: Option<String>,
+    /// Configure a managed Iceberg table (`table_format`, `external_volume`, `base_location_root`,
+    /// `iceberg_version`); the catalog relation is then resolved from this config for real.
+    iceberg: bool,
+    incremental_strategy: Option<&'static str>,
+    unique_key: Option<Value>,
+    delete_condition: Option<&'static str>,
+    merge_update_columns: Option<Value>,
+    merge_exclude_columns: Option<Value>,
 }
 
 /// A serialized model node, built the way the run context builds `config.model`.
@@ -94,7 +127,7 @@ fn serialized_model(config: &LocalConfig) -> Value {
         schema: SCHEMA.to_string(),
         alias: IDENTIFIER.to_string(),
         relation_name: None,
-        quoting: dbt_schemas::schemas::relations::SNOWFLAKE_RESOLVED_QUOTING,
+        quoting: SNOWFLAKE_RESOLVED_QUOTING,
         quoting_ignore_case: false,
         materialized: DbtMaterialization::DynamicTable,
         compute: None,
@@ -111,19 +144,34 @@ fn serialized_model(config: &LocalConfig) -> Value {
         depends_on: Default::default(),
     };
 
-    let wh_config = WarehouseSpecificNodeConfig {
+    let wh_config: LazyWarehouseSpecificNodeConfig = WarehouseSpecificNodeConfig {
         target_lag: config.target_lag.clone(),
         snowflake_warehouse: config.snowflake_warehouse.clone(),
         snowflake_initialization_warehouse: config.snowflake_initialization_warehouse.clone(),
         cluster_by: config.cluster_by.clone(),
         refresh_mode: config.refresh_mode.clone(),
+        transient: config.transient,
+        scheduler: config.scheduler.clone(),
+        immutable_where: config.immutable_where.clone(),
+        initialize: config.initialize.clone(),
+        copy_grants: config.copy_grants,
+        table_tag: config.table_tag.clone(),
+        row_access_policy: config.row_access_policy.clone(),
+        external_volume: config.iceberg.then(|| "MY_VOLUME".to_string()),
+        base_location_root: config.iceberg.then(|| "_dbt".to_string()),
+        iceberg_version: config.iceberg.then_some(2),
         ..Default::default()
-    };
-    let adapter_attr = AdapterAttr::from_config_and_dialect(&wh_config, ADAPTER);
+    }
+    .into();
+    let adapter_attr = AdapterAttr::from_lazy_config_and_dialect(&wh_config, ADAPTER);
 
     let model = DbtModel {
         deprecated_config: ModelConfig {
             __warehouse_specific_config__: wh_config,
+            ..Default::default()
+        },
+        __model_attr__: DbtModelAttr {
+            table_format: config.iceberg.then(|| "iceberg".to_string()),
             ..Default::default()
         },
         __common_attr__: CommonAttributes {
@@ -147,6 +195,13 @@ fn dynamic_config(
     on_configuration_change: &'static str,
 ) -> Arc<MockJinjaObject> {
     let mock = default_mock_config();
+    let refresh_mode = local.refresh_mode.clone();
+    let immutable_where = local.immutable_where.clone();
+    let incremental_strategy = local.incremental_strategy;
+    let unique_key = local.unique_key.clone();
+    let delete_condition = local.delete_condition;
+    let merge_update_columns = local.merge_update_columns.clone();
+    let merge_exclude_columns = local.merge_exclude_columns.clone();
     mock.on("get", move |args| {
         let key = args.first().and_then(|v| v.as_str());
         // `default` may arrive positionally or as a keyword (`default=...`), which minijinja
@@ -164,6 +219,13 @@ fn dynamic_config(
             )]))),
             Some("full_refresh") => Ok(Value::from(full_refresh)),
             Some("on_configuration_change") => Ok(Value::from(on_configuration_change)),
+            Some("refresh_mode") => Ok(refresh_mode.clone().map_or(default, Value::from)),
+            Some("immutable_where") => Ok(immutable_where.clone().map_or(default, Value::from)),
+            Some("incremental_strategy") => Ok(incremental_strategy.map_or(default, Value::from)),
+            Some("unique_key") => Ok(unique_key.clone().unwrap_or(default)),
+            Some("delete_condition") => Ok(delete_condition.map_or(default, Value::from)),
+            Some("merge_update_columns") => Ok(merge_update_columns.clone().unwrap_or(default)),
+            Some("merge_exclude_columns") => Ok(merge_exclude_columns.clone().unwrap_or(default)),
             _ => Ok(default),
         }
     });
@@ -222,14 +284,86 @@ fn strip_block_comments(sql: &str) -> String {
     out
 }
 
+/// Knobs for the adapter-level collaborators the materialization consults.
+#[derive(Default)]
+struct FixtureOptions {
+    /// The `snowflake_dynamic_table_create_or_alter` behavior flag. The materialization's gate
+    /// (`snowflake__dynamic_table_create_or_alter_enabled`) combines it with the resolved catalog.
+    create_or_alter: bool,
+    /// The `snowflake_default_transient_dynamic_tables` behavior flag.
+    default_transient: bool,
+    /// The configured catalog is a managed Iceberg one (`BUILT_IN`) instead of the native default.
+    iceberg_target: bool,
+    /// The live relation is a dynamic Iceberg table (`SHOW OBJECTS` reports `is_iceberg`).
+    iceberg_existing: bool,
+    /// What CI DT column discovery reads back, as `(name, data type)` pairs; [`CI_COLUMNS`] when
+    /// unset.
+    columns: Option<&'static [(&'static str, &'static str)]>,
+}
+
 /// Build a harness whose `describe_relation` returns `remote` for a dynamic-table relation.
 fn fixture(existing: Option<RelationType>, remote: RemoteState) -> Fixture {
+    fixture_with(existing, remote, FixtureOptions::default())
+}
+
+fn fixture_with(
+    existing: Option<RelationType>,
+    remote: RemoteState,
+    options: FixtureOptions,
+) -> Fixture {
     let mut harness = MacroTestHarness::for_adapter(ADAPTER)
         .load_all_macros()
         .with_stub_functions()
         .build()
         .expect("harness should build");
 
+    let raw_results = install_recorders(&mut harness);
+    install_behavior(&harness, &options);
+    install_catalog_relation(&harness, options.iceberg_target);
+
+    let existing_value = existing_relation_value(existing, options.iceberg_existing);
+    harness
+        .mock()
+        .on("get_relation", move |_| Ok(existing_value.clone()));
+
+    let described = describe_result(remote);
+    harness
+        .mock()
+        .on("describe_relation", move |_| Ok(described.clone()));
+    install_column_discovery(&harness, options.columns.unwrap_or(CI_COLUMNS));
+
+    Fixture {
+        harness,
+        raw_results,
+    }
+}
+
+/// `get_columns_in_relation` (CI DT column discovery) returns `columns`; the temporary relation
+/// is dropped through `drop_relation`.
+fn install_column_discovery(harness: &MacroTestHarness, columns: &[(&str, &str)]) {
+    let columns = Value::from(
+        columns
+            .iter()
+            .map(|(name, data_type)| {
+                Value::from_object(Column::new(
+                    ADAPTER,
+                    name.to_string(),
+                    data_type.to_string(),
+                    None,
+                    None,
+                    None,
+                ))
+            })
+            .collect::<Vec<_>>(),
+    );
+    harness
+        .mock()
+        .on("get_columns_in_relation", move |_| Ok(columns.clone()));
+    harness.mock().on("drop_relation", |_| Ok(Value::UNDEFINED));
+}
+
+/// Capture `store_raw_result` calls (returned) and swallow `log`.
+fn install_recorders(harness: &mut MacroTestHarness) -> Recorder {
     let raw_results: Recorder = Arc::new(Mutex::new(Vec::new()));
     let sink = raw_results.clone();
     harness
@@ -250,45 +384,67 @@ fn fixture(existing: Option<RelationType>, remote: RemoteState) -> Fixture {
             logs.lock().unwrap().push(msg.to_string());
             Ok(Value::UNDEFINED)
         });
+    raw_results
+}
 
+/// The behavior flags the materialization reads.
+fn install_behavior(harness: &MacroTestHarness, options: &FixtureOptions) {
     harness.mock().set_attr(
         "behavior",
         Value::from_serialize(BTreeMap::from([
             ("use_catalogs_v2", BTreeMap::from([("no_warn", false)])),
             (
                 "snowflake_default_transient_dynamic_tables",
-                BTreeMap::from([("no_warn", false)]),
+                BTreeMap::from([("no_warn", options.default_transient)]),
+            ),
+            (
+                "snowflake_dynamic_table_create_or_alter",
+                BTreeMap::from([("no_warn", options.create_or_alter)]),
             ),
         ])),
     );
+}
 
-    let catalog_relation = Value::from_object(
+/// `build_catalog_relation`: the default native catalog, or (for an Iceberg target) the managed
+/// Iceberg catalog resolved from the model config exactly as the adapter does.
+fn install_catalog_relation(harness: &MacroTestHarness, iceberg_target: bool) {
+    let native_catalog_relation = Value::from_object(
         dbt_adapter::catalog_relation::CatalogRelation::default_catalog_relation_snowflake(),
     );
-    harness.mock().on("build_catalog_relation", move |_| {
-        Ok(catalog_relation.clone())
-    });
-
-    let existing_value = match existing {
-        Some(relation_type) => {
-            let relation = harness.relation(DATABASE, SCHEMA, IDENTIFIER, Some(relation_type));
-            RelationObject::new(relation).into_value()
+    harness.mock().on("build_catalog_relation", move |args| {
+        if !iceberg_target {
+            return Ok(native_catalog_relation.clone());
         }
-        None => Value::from(()),
+        let model = args
+            .first()
+            .expect("build_catalog_relation takes the model");
+        let catalog_relation =
+            dbt_adapter::catalog_relation::CatalogRelation::from_model_config_and_catalogs(
+                ADAPTER, model, None,
+            )
+            .expect("the managed Iceberg model config should resolve");
+        Ok(Value::from_object(catalog_relation))
+    });
+}
+
+/// The relation `get_relation` returns: none, or an existing dynamic table (native or Iceberg).
+fn existing_relation_value(existing: Option<RelationType>, iceberg: bool) -> Value {
+    let Some(relation_type) = existing else {
+        return Value::from(());
     };
-    harness
-        .mock()
-        .on("get_relation", move |_| Ok(existing_value.clone()));
-
-    let described = describe_result(remote);
-    harness
-        .mock()
-        .on("describe_relation", move |_| Ok(described.clone()));
-
-    Fixture {
-        harness,
-        raw_results,
+    let mut relation = create_relation(
+        ADAPTER,
+        DATABASE.to_string(),
+        SCHEMA.to_string(),
+        Some(IDENTIFIER.to_string()),
+        Some(relation_type),
+        SNOWFLAKE_RESOLVED_QUOTING,
+    )
+    .expect("create_relation");
+    if iceberg {
+        relation.set_table_format(Some(TableFormat::Iceberg));
     }
+    RelationObject::new(Arc::from(relation)).into_value()
 }
 
 fn render(
@@ -297,9 +453,45 @@ fn render(
     full_refresh: bool,
     on_configuration_change: &'static str,
 ) -> dbt_common::FsResult<String> {
-    let ctx = fixture
+    render_sql(
+        fixture,
+        local,
+        MODEL_SQL,
+        full_refresh,
+        on_configuration_change,
+    )
+}
+
+/// [`render`] with `sql` as the compiled model SQL.
+fn render_sql(
+    fixture: &Fixture,
+    local: &LocalConfig,
+    sql: &str,
+    full_refresh: bool,
+    on_configuration_change: &'static str,
+) -> dbt_common::FsResult<String> {
+    render_run(
+        fixture,
+        local,
+        sql,
+        full_refresh,
+        on_configuration_change,
+        false,
+    )
+}
+
+/// [`render_sql`] as `dbt run`, or `dbt run --empty` when `empty` (`flags.EMPTY`).
+fn render_run(
+    fixture: &Fixture,
+    local: &LocalConfig,
+    sql: &str,
+    full_refresh: bool,
+    on_configuration_change: &'static str,
+    empty: bool,
+) -> dbt_common::FsResult<String> {
+    let mut ctx = fixture
         .harness
-        .materialization_context(IDENTIFIER, MODEL_SQL)
+        .materialization_context(IDENTIFIER, sql)
         .database(DATABASE)
         .schema(SCHEMA)
         .relation_type(RelationType::DynamicTable)
@@ -307,9 +499,17 @@ fn render(
             local,
             full_refresh,
             on_configuration_change,
-        )))
-        .build();
-    fixture.harness.render(MATERIALIZATION, ctx)
+        )));
+    if empty {
+        ctx = ctx.with(
+            "flags",
+            Value::from_serialize(BTreeMap::from([
+                ("EMPTY", true),
+                ("FULL_REFRESH", full_refresh),
+            ])),
+        );
+    }
+    fixture.harness.render(MATERIALIZATION, ctx.build())
 }
 
 fn render_ok(
@@ -511,3 +711,7 @@ fn on_configuration_change_continue_skips_the_build() {
     );
     assert_eq!(fixture.raw_results(), vec!["main=skip".to_string()]);
 }
+
+mod create_or_alter;
+mod custom_incremental;
+mod iceberg;

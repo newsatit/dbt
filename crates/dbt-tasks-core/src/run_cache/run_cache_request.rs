@@ -373,7 +373,7 @@ pub fn build_seed_values_request<'a>(
     Ok(SubmitValuesRequestInput {
         target_table: target_table_for_node(context.adapter_type, seed)?,
         dialect: context.dialect,
-        default_catalog: seed.database(),
+        default_catalog: seed.database().to_string(),
         values_hash,
         semantic_extras,
         last_modified_epoch: context.last_modified_epoch,
@@ -575,7 +575,7 @@ fn build_sql_request_input(
     Ok(SubmitEnrichedSqlRequestInput {
         target_table: Some(target_table_for_node(context.adapter_type, node)?),
         dialect: context.dialect,
-        default_catalog: node.database(),
+        default_catalog: node.database().to_string(),
         default_schema: Some(context.default_schema),
         execution_type,
         sql: context.sql,
@@ -691,6 +691,11 @@ fn warehouse_specific_semantic_extra_config(
     insert_json(&mut extras, "target_lag", whc.target_lag.as_ref())?;
     insert_json(&mut extras, "refresh_mode", whc.refresh_mode.as_ref())?;
     insert_json(&mut extras, "immutable_where", whc.immutable_where.as_ref())?;
+    insert_json(
+        &mut extras,
+        "delete_condition",
+        whc.delete_condition.as_ref(),
+    )?;
     insert_json(&mut extras, "copy_grants", whc.copy_grants.as_ref())?;
     insert_json(
         &mut extras,
@@ -1503,7 +1508,7 @@ mod tests {
         let mut test = make_test();
         test.__base_attr__.schema = "ANALYTICS".to_string();
         let mut context = sql_context(false);
-        context.default_schema = test.schema();
+        context.default_schema = test.schema().to_string();
 
         let request = build_test_sql_request(&test, context, |_| None).unwrap();
 

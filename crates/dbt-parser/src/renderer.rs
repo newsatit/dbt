@@ -25,13 +25,11 @@ use dbt_jinja_utils::listener::{
     JinjaTypeCheckingEventListenerFactory, RenderingEventListenerFactory,
 };
 use dbt_jinja_utils::node_resolver::NodeResolver;
-use dbt_jinja_utils::phases::build_operation_context_btreemap;
 use dbt_jinja_utils::phases::compile::{
     DependencyValidationConfig, build_compile_node_context_inner,
 };
-use dbt_jinja_utils::phases::parse::{
-    ParseAdapterScopes, build_resolve_model_context, update_resolve_model_relation,
-};
+use dbt_jinja_utils::phases::parse::{build_resolve_model_context, update_resolve_model_relation};
+use dbt_jinja_utils::phases::{AdapterScopes, build_operation_context_btreemap};
 use dbt_jinja_utils::serde::into_typed_with_jinja_error_context;
 use dbt_jinja_utils::silence_base_context;
 use dbt_jinja_utils::utils::{
@@ -59,6 +57,7 @@ use dbt_frontend_common::error::CodeLocation;
 use dbt_jinja_utils::phases::parse::sql_resource::SqlResource;
 use minijinja::compiler::meta::{StaticFunctionCall, find_string_arg_calls, find_undeclared};
 use minijinja::constants::{TARGET_PACKAGE_NAME, TARGET_UNIQUE_ID};
+use minijinja::value::OverlayMap;
 use minijinja::{MacroSpans, Value as MinijinjaValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -252,12 +251,12 @@ fn augment_sql_resources_with_static_sources<T: ResolvableConfig<T>>(
 
 fn preview_node_relation<T: ResolvableConfig<T> + 'static>(
     render_ctx: &RenderCtx<T>,
-    context: &mut BTreeMap<String, MinijinjaValue>,
+    context: &mut OverlayMap,
     config: &dbt_yaml::Value,
     adapter: AdapterType,
 ) -> FsResult<()> {
     let inner = &render_ctx.inner;
-    let model = &context["model"];
+    let model = context.get("model").expect("parse model");
     let mut node = BTreeMap::new();
     for key in model.try_iter().expect("parse model keys") {
         let name = key.as_str().expect("model field name");
@@ -298,7 +297,7 @@ fn preview_node_relation<T: ResolvableConfig<T> + 'static>(
     naming_config["quoting"] = dbt_yaml::to_value(quoting).expect("resolved node quoting config");
     node.insert(
         "config".to_string(),
-        dbt_schemas::schemas::serde::yml_value_to_minijinja(&naming_config),
+        dbt_schemas::schemas::serde::yml_value_to_minijinja(naming_config),
     );
     let quoting: ResolvedQuoting = quoting.try_into().expect("resolved node quoting");
     let (database, schema) = {
@@ -581,11 +580,10 @@ where
         (Some(adapter), Some(scopes)) => scopes.declared(adapter).ok().flatten(),
         _ => None,
     };
-    let render_adapter = scope
-        .filter(|scope| scope.dialect().is_some())
-        .map_or(*adapter_type, |scope| scope.adapter_type);
+    let render_adapter = scope.map_or(*adapter_type, |scope| scope.adapter_type);
 
-    let mut resolve_model_context = base_ctx.clone();
+    let mut resolve_model_context =
+        OverlayMap::new(MinijinjaValue::from_dyn_object(Arc::clone(base_ctx)));
     resolve_model_context.extend(build_resolve_model_context(
         &properties_config,
         root_overlay_forces_enabled,
@@ -662,7 +660,9 @@ where
             unique_id,
             render_adapter,
             true,
-            resolve_model_context.get(minijinja::constants::MACRO_DISPATCH_ORDER),
+            resolve_model_context
+                .get(minijinja::constants::MACRO_DISPATCH_ORDER)
+                .as_ref(),
         );
     }
 
@@ -938,7 +938,7 @@ pub struct RenderCtxInner<T: ResolvableConfig<T>> {
     /// The arguments for the resolve
     pub args: ResolveArgs,
     /// The base context for the jinja environment
-    pub base_ctx: BTreeMap<String, MinijinjaValue>,
+    pub base_ctx: Arc<BTreeMap<String, MinijinjaValue>>,
     /// The name of the root project
     pub root_project_name: String,
     /// The name of the package
@@ -957,7 +957,7 @@ pub struct RenderCtxInner<T: ResolvableConfig<T>> {
     /// `adapter`, which its generated `config()` otherwise sets only during the render.
     pub adapter_layer: Option<HashMap<PathBuf, T>>,
     /// Per-adapter parse identity of the active target. `None` renders every node as the default.
-    pub parse_adapter_scopes: Option<Arc<ParseAdapterScopes>>,
+    pub parse_adapter_scopes: Option<Arc<AdapterScopes>>,
     /// Quoting policies authored for the target's adapters.
     pub adapter_quoting: IndexMap<AdapterType, DbtQuoting>,
     /// The resource paths
@@ -1100,7 +1100,7 @@ pub async fn collect_adapter_identifiers_detect_unsafe<
     package_name: &str,
     root_project_name: &str,
     runtime_config: Arc<DbtRuntimeConfig>,
-    parse_adapter_scopes: &Arc<ParseAdapterScopes>,
+    parse_adapter_scopes: &Arc<AdapterScopes>,
     token: &CancellationToken,
 ) -> FsResult<Vec<(T, bool)>> {
     if node_map.is_empty() {
@@ -1177,7 +1177,7 @@ async fn process_model_chunk_for_unsafe_detection<
     root_project_name: String,
     runtime_config: Arc<DbtRuntimeConfig>,
     parse_adapter: Arc<dbt_adapter::Adapter>,
-    parse_adapter_scopes: &ParseAdapterScopes,
+    parse_adapter_scopes: &AdapterScopes,
     token: &CancellationToken,
 ) -> FsResult<Vec<(T, bool)>> {
     let mut nodes = Vec::new();
@@ -1196,6 +1196,7 @@ async fn process_model_chunk_for_unsafe_detection<
         None,
     );
     silence_base_context(&mut render_base_context);
+    let render_base_context = MinijinjaValue::from(render_base_context);
 
     for (_key, model) in chunk {
         token.check_cancellation()?;
@@ -1208,12 +1209,13 @@ async fn process_model_chunk_for_unsafe_detection<
         };
         let sql = read_to_string(&absolute_path).await?;
 
-        render_base_context.insert(
-            TARGET_PACKAGE_NAME.to_string(),
+        let mut model_base_context = OverlayMap::new(render_base_context.clone());
+        model_base_context.insert(
+            TARGET_PACKAGE_NAME,
             MinijinjaValue::from(model.common().package_name.clone()),
         );
-        render_base_context.insert(
-            TARGET_UNIQUE_ID.to_string(),
+        model_base_context.insert(
+            TARGET_UNIQUE_ID,
             MinijinjaValue::from(model.common().unique_id.clone()),
         );
 
@@ -1221,7 +1223,7 @@ async fn process_model_chunk_for_unsafe_detection<
         let (mut render_resolved_context, _) = build_compile_node_context_inner(
             model.clone(),
             model.node_adapter(),
-            &render_base_context,
+            &MinijinjaValue::from(model_base_context),
             &root_project_name,
             node_resolver.clone(),
             runtime_config.clone(),
@@ -1298,7 +1300,7 @@ pub fn collect_hook_dependencies_from_config(
     adapter_type: AdapterType,
     resource_path: &Path,
     io: IoArgs,
-    hook_context: &BTreeMap<String, MinijinjaValue>,
+    hook_context: &OverlayMap,
     jinja_type_checking_event_listener_factory: Arc<dyn JinjaTypeCheckingEventListenerFactory>,
 ) -> FsResult<()> {
     // Helper function to extract SQL strings from hooks
@@ -1352,7 +1354,9 @@ pub fn collect_hook_dependencies_from_config(
                 unique_id,
                 adapter_type,
                 true,
-                hook_context.get(minijinja::constants::MACRO_DISPATCH_ORDER),
+                hook_context
+                    .get(minijinja::constants::MACRO_DISPATCH_ORDER)
+                    .as_ref(),
             );
         }
         let listener_factory = DefaultRenderingEventListenerFactory::default();
